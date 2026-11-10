@@ -1,0 +1,40 @@
+name: Android debug build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check project files
+        run: |
+          if [ ! -f gradlew ] || [ ! -f app/build.gradle.kts ]; then
+            echo 'Android project files are missing: expected gradlew and app/build.gradle.kts in the repository.' >&2
+            exit 1
+          fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-35' 'sources;android-37.0'
+      - name: Assemble debug APK
+        run: bash gradlew assembleDebug
+      - name: Run local unit tests if available
+        run: |
+          if [ -d app/src/test ]; then
+            bash gradlew :app:testDebugUnitTest
+          else
+            echo 'No local unit tests found.'
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 3xBoard-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
