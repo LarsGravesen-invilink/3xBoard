@@ -47,7 +47,8 @@ enum class SshFailureReason(val description: String) {
     HOST_CHANGED("Ключ SSH действительно отличается от сохранённого. Соединение запрещено. Сверьте отпечаток с консолью провайдера; автоматически заменять ключ нельзя."),
     HOST_ADDRESS("Адрес ключа SSH не соответствует выбранному серверу. Соединение запрещено."),
     HOST_STORAGE("Не удалось прочитать или проверить сохранённый ключ SSH. Данные не сброшены; соединение запрещено."),
-    AUTHENTICATION("Сервер отклонил аутентификацию. Проверьте логин, пароль и разрешение входа root по паролю. Поддерживаются password и одношаговый пароль PAM. SSH-ключ, OTP, смена пароля и многофакторная проверка могут требовать другого способа входа."),
+    AUTHENTICATION("Ключ SSH-сервера проверен, но войти не удалось. Проверьте именно SSH-логин и пароль, а не данные панели. Вход по паролю должен быть разрешён на сервере для этого пользователя."),
+    PASSWORD_AUTH_UNAVAILABLE("Ключ SSH-сервера проверен, но вход по паролю не начался. Сервер может не разрешать вход по паролю для этого пользователя. Проверьте настройки SSH или выберите закрытый ключ."),
     UNSUPPORTED_AUTH_CHALLENGE("Сервер запросил неподдерживаемую проверку. Поддерживается только один скрытый запрос пароля PAM; OTP, смена пароля и многошаговая проверка не поддерживаются. Это не означает, что пароль неверен."),
     ALGORITHMS("Не удалось согласовать современные алгоритмы SSH. Проверьте конфигурацию SSH сервера; небезопасные алгоритмы автоматически не включаются."),
     DNS("Не удалось определить IP-адрес SSH-сервера. Проверьте имя и DNS."),
@@ -159,7 +160,7 @@ class SshConnection(private val store: ServerStore) : AutoCloseable {
                 val candidate = Link(session)
                 connecting = candidate
                 val repository = PinnedHosts(store::knownHost, checked.host, checked.port.toInt())
-                val passwordInfo = if (checked.authMethod == SshAuthMethod.PASSWORD) PasswordUserInfo(checked.password, checked.username) else null
+                val passwordInfo = if (checked.authMethod == SshAuthMethod.PASSWORD) PasswordUserInfo(checked.password, checked.username, checked.host) else null
                 try {
                     currentCoroutineContext().ensureActive()
                     val previous = synchronized(stateLock) {
@@ -557,9 +558,9 @@ class SshConnection(private val store: ServerStore) : AutoCloseable {
         }
     }
 
-    private class PasswordUserInfo(private var password: String?, username: String) : UserInfo, UIKeyboardInteractive {
+    internal class PasswordUserInfo(private var password: String?, username: String, host: String) : UserInfo, UIKeyboardInteractive {
         private val passwordPrompt = Regex(
-            "[ \\t]*(?:(?iu:password|пароль)|${Regex.escape(username)}(?i:'s password)|(?iu:password for|пароль для) ${Regex.escape(username)})[ \\t]*:?[ \\t]*",
+            "[ \\t]*(?:(?iu:password|пароль)|${Regex.escape(username)}(?:@${Regex.escape(host)})?(?i:'s password)|(?iu:password for|пароль для) ${Regex.escape(username)}(?:@${Regex.escape(host)})?)[ \\t]*:?[ \\t]*",
         )
         private val unsupportedContext = Regex(
             "otp|passcode|one[ -]?time|verification|authenticator|token|\\b(?:pin|code|2fa|mfa)\\b|chang|expir|(?:new|old|current)[ \\t]+password|однораз|код|токен|смен|измен|(?:нов|стар|текущ)[а-яё]*[ \\t]+парол|ист[её]к",
@@ -801,6 +802,8 @@ class SshConnection(private val store: ServerStore) : AutoCloseable {
             causes.any { it is ConnectException || it is java.net.NoRouteToHostException } -> SshFailureReason.NETWORK
             causes.any { it is JSchAlgoNegoFailException } -> SshFailureReason.ALGORITHMS
             verified && passwordInfo?.deniedChallenge == true -> SshFailureReason.UNSUPPORTED_AUTH_CHALLENGE
+            verified && passwordInfo != null && passwordInfo.attemptedMethods().isEmpty() &&
+                causes.any { it.message?.startsWith("Auth fail") == true } -> SshFailureReason.PASSWORD_AUTH_UNAVAILABLE
             causes.any { it.message?.startsWith("Auth fail") == true || it.message?.startsWith("Auth cancel") == true } && verified ->
                 SshFailureReason.AUTHENTICATION
             causes.any { it.message?.contains("invalid privatekey") == true || it.message?.contains("decrypt private key") == true } -> SshFailureReason.PRIVATE_KEY

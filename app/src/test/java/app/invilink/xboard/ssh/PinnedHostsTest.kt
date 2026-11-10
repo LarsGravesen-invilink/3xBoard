@@ -85,6 +85,23 @@ class PinnedHostsTest {
     }
 
     @Test
+    fun keyboardInteractiveAcceptsKnownPasswordPromptsOnlyOnce() {
+        for (prompt in listOf("Password:", "root's password:", "root@example.test's password:", "Password for root@example.test:")) {
+            val info = SshConnection.PasswordUserInfo("secret", "root", host)
+            assertArrayEquals(arrayOf("secret"), info.promptKeyboardInteractive(null, "", "", arrayOf(prompt), booleanArrayOf(false)))
+            assertNull(info.promptKeyboardInteractive(null, "", "", arrayOf(prompt), booleanArrayOf(false)))
+        }
+        for (prompt in listOf("OTP:", "New Password:", "root@other.test's password:")) {
+            val info = SshConnection.PasswordUserInfo("secret", "root", host)
+            assertNull(info.promptKeyboardInteractive(null, "", "", arrayOf(prompt), booleanArrayOf(false)))
+            assertTrue(info.deniedChallenge)
+        }
+        val info = SshConnection.PasswordUserInfo("secret", "root", host)
+        assertNull(info.promptKeyboardInteractive(null, "", "", arrayOf("Password:", "OTP:"), booleanArrayOf(false, false)))
+        assertTrue(info.deniedChallenge)
+    }
+
+    @Test
     fun sessionPasswordIsWipedEvenBeforeConnect() {
         val session = com.jcraft.jsch.JSch().getSession("user", host, 22)
         session.setPassword("secret".toByteArray(Charsets.UTF_8))
