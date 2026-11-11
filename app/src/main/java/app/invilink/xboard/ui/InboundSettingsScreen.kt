@@ -41,6 +41,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import app.invilink.xboard.panels.InboundDraft
 import app.invilink.xboard.CascadeEditorState
@@ -210,7 +212,7 @@ internal fun InboundSettingsScreen(
                 Text("Инбаунд включён", Modifier.weight(1f))
                 Switch(checked = draft.enabled, onCheckedChange = onEnabled, enabled = !saving)
             }
-            InboundSettingField("name", "Имя инбаунда", draft.name, saving, onField, "Необязательно; до 128 символов.")
+            InboundNameField(draft.name, saving, onField)
             InboundSettingField(
                 "port", "Порт TCP/UDP", draft.port, saving, onField,
                 "Один порт от 1 до 65535.", KeyboardType.Number,
@@ -573,6 +575,26 @@ private fun InboundDraftField(
             ) { Text("Сгенерировать") }
         }
     }
+}
+
+@Composable
+private fun InboundNameField(value: String, saving: Boolean, onField: (String, String) -> Unit) {
+    var editing by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    if (editing.text != value) {
+        editing = TextFieldValue(value, TextRange(editing.selection.start.coerceIn(0, value.length), editing.selection.end.coerceIn(0, value.length)))
+    }
+    OutlinedTextField(
+        value = editing,
+        onValueChange = { next ->
+            val updated = updateClientName(editing, next, InboundDraft::normalizeAwgName)
+            editing = updated
+            if (updated.text != value) onField("name", updated.text)
+        },
+        label = { Text("Имя инбаунда") },
+        supportingText = { Text("До 128 символов; флаги: RU:, :RU и :RU:.") },
+        modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !saving,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text), shape = MaterialTheme.shapes.medium,
+    )
 }
 
 @Composable

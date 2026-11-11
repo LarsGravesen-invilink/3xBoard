@@ -651,7 +651,7 @@ data class InboundDraft(
             }
         }
 
-        private fun normalizeAwgName(value: String): String {
+        internal fun normalizeAwgName(value: String): String {
             val normalized = normalizeClientName(value)
             val prefix = Regex("^:([A-Za-z]{2})(?![A-Za-z:])").find(normalized) ?: return normalized
             val flag = countryFlagForClientName(prefix.groupValues[1] + ":")

@@ -117,7 +117,8 @@ internal fun ClientFieldControl(
     }
 }
 
-internal fun updateClientName(previous: TextFieldValue, next: TextFieldValue): TextFieldValue {
+internal fun updateClientName(previous: TextFieldValue, next: TextFieldValue,
+    normalize: (String) -> String = ::normalizeClientName): TextFieldValue {
     val old = previous.text
     val incoming = next.text
     var prefix = 0
@@ -151,9 +152,9 @@ internal fun updateClientName(previous: TextFieldValue, next: TextFieldValue): T
             result = TextFieldValue(text, TextRange(start))
         }
     }
-    val normalized = normalizeClientName(result.text)
+    val normalized = normalize(result.text)
     if (normalized == result.text) return result
-    fun mapped(offset: Int): Int = normalizeClientName(result.text.take(offset)).length.coerceIn(0, normalized.length)
+    fun mapped(offset: Int): Int = normalize(result.text.take(offset)).length.coerceIn(0, normalized.length)
     return TextFieldValue(normalized, TextRange(mapped(result.selection.start), mapped(result.selection.end)))
 }
 

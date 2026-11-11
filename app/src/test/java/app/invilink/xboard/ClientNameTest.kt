@@ -81,6 +81,20 @@ class ClientNameTest {
     }
 
     @Test
+    fun inboundFlagEditingPreservesSpacesAndRemovesCompleteFlag() {
+        val normalize: (String) -> String = app.invilink.xboard.panels.InboundDraft::normalizeAwgName
+        val converted = updateClientName(TextFieldValue("RU", TextRange(2)), TextFieldValue("RU:", TextRange(3)), normalize)
+        assertEquals(ru, converted.text)
+        assertEquals(TextRange(4), converted.selection)
+        val spaced = updateClientName(converted, TextFieldValue(ru + " имя с пробелами", TextRange(20)), normalize)
+        assertEquals(ru + " имя с пробелами", spaced.text)
+        val deleted = updateClientName(converted, TextFieldValue(ru.substring(0, 2), TextRange(2)), normalize)
+        assertEquals("", deleted.text)
+        val draft = app.invilink.xboard.panels.InboundDraft.create().update("protocol", "amneziawg").update("name", spaced.text)
+        assertEquals(spaced.text, draft.payload().getString("remark"))
+    }
+
+    @Test
     fun flagCommandsWorkAnywhereAndMoreThanOnce() {
         assertEquals("Имя" + ru + "текст" + de, normalizeClientName("Имя:RU:текст:DE:"))
         assertEquals(ru + "Имя" + de, normalizeClientName("RU:Имя:DE:"))
