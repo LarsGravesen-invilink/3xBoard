@@ -11,6 +11,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InboundDraftTest {
+    @Test fun amneziaDefaultsAndEditableSettings() {
+        val draft = InboundDraft.create().update("protocol", "amneziawg").update("name", ":RU test")
+        val server = JSONObject(draft.payload().getString("settings")).getJSONObject("server")
+        assertEquals(1280, server.getInt("mtu"))
+        assertEquals("8.8.8.8", server.getString("primaryDns"))
+        assertEquals("1.1.1.1", server.getString("secondaryDns"))
+        assertTrue(draft.name.startsWith("🇷🇺"))
+        assertTrue(draft.port.toInt() in 10000..59999)
+        assertEquals(9, JSONObject(draft.update("awg:jc", "9").payload().getString("settings")).getJSONObject("server").getInt("jc"))
+        assertThrows(IllegalArgumentException::class.java) { draft.update("awg:jmin", "51").payload() }
+    }
     private fun reality(): InboundDraft = InboundDraft.create()
         .update("network", "xhttp")
         .update("security", "reality")

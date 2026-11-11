@@ -6,18 +6,24 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import java.net.HttpURLConnection
 import java.net.URL
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+internal fun connectivityStatus(hasInternet: Boolean, validated: Boolean, probeSucceeded: Boolean): Boolean =
+    hasInternet && (validated || probeSucceeded)
 
 class ConnectivityObserver(context: Context) : AutoCloseable {
     private val manager = (context.applicationContext ?: context)
@@ -28,6 +34,7 @@ class ConnectivityObserver(context: Context) : AutoCloseable {
     val online: StateFlow<Boolean> = mutableOnline.asStateFlow()
     private var current: Network? = null
     private var probeJob: Job? = null
+    private var generation = 0L
     private var registered = false
     private var closed = false
 
@@ -45,29 +52,84 @@ class ConnectivityObserver(context: Context) : AutoCloseable {
         finally { connection?.disconnect() }
     }
 
-    private fun start(network: Network) = synchronized(lock) {
-        if (closed || current == network && probeJob?.isActive == true) return@synchronized
+    private fun update(network: Network, capabilities: NetworkCapabilities?, force: Boolean = false) = synchronized(lock) {
+        if (closed) return@synchronized
+        val internet = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+        val validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+        if (!internet) {
+            if (current == network) {
+                generation++
+                probeJob?.cancel()
+                probeJob = null
+                current = null
+                mutableOnline.value = false
+            }
+            return@synchronized
+        }
+        if (validated) {
+            generation++
+            probeJob?.cancel()
+            probeJob = null
+            current = network
+            mutableOnline.value = connectivityStatus(internet, validated, false)
+            return@synchronized
+        }
+        if (!force && current == network && probeJob?.isActive == true) return@synchronized
+        val changed = current != network
+        generation++
+        val ticket = generation
         probeJob?.cancel()
         current = network
-        mutableOnline.value = false
+        if (changed) mutableOnline.value = false
         probeJob = scope.launch {
             while (isActive) {
-                val available = probe(network, "https://www.google.com/generate_204") ||
-                    probe(network, "https://yandex.ru/generate_204")
-                synchronized(lock) { if (!closed && current == network) mutableOnline.value = available }
-                delay(if (available) 30_000L else 10_000L)
+                val available = coroutineScope {
+                    val google = async { probe(network, "https://www.google.com/generate_204") }
+                    val yandex = async { probe(network, "https://yandex.ru/generate_204") }
+                    google.await() or yandex.await()
+                }
+                currentCoroutineContext().ensureActive()
+                synchronized(lock) {
+                    if (!closed && current == network && generation == ticket) {
+                        mutableOnline.value = connectivityStatus(true, false, available)
+                    }
+                }
+                delay(if (available) 30_000L else 3_000L)
             }
         }
     }
 
+    fun refresh() {
+        val active = try { manager?.activeNetwork } catch (_: Exception) { null }
+        if (active == null) {
+            synchronized(lock) {
+                if (!closed) {
+                    generation++
+                    probeJob?.cancel()
+                    probeJob = null
+                    current = null
+                    mutableOnline.value = false
+                }
+            }
+            return
+        }
+        val capabilities = try { manager?.getNetworkCapabilities(active) } catch (_: Exception) { null }
+        update(active, capabilities, force = true)
+    }
+
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) { start(network) }
+        override fun onAvailable(network: Network) {
+            val capabilities = try { manager?.getNetworkCapabilities(network) } catch (_: Exception) { null }
+            if (capabilities != null) update(network, capabilities)
+        }
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) start(network)
+            update(network, capabilities)
         }
         override fun onLost(network: Network) = synchronized(lock) {
             if (!closed && current == network) {
+                generation++
                 probeJob?.cancel()
+                probeJob = null
                 current = null
                 mutableOnline.value = false
             }
@@ -81,9 +143,7 @@ class ConnectivityObserver(context: Context) : AutoCloseable {
         try {
             manager?.registerDefaultNetworkCallback(callback)
             registered = manager != null
-            manager?.activeNetwork?.let { network ->
-                if (manager.getNetworkCapabilities(network)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true) start(network)
-            }
+            refresh()
         } catch (_: Exception) { mutableOnline.value = false }
     }
 
@@ -91,6 +151,7 @@ class ConnectivityObserver(context: Context) : AutoCloseable {
         synchronized(lock) {
             if (closed) return
             closed = true
+            generation++
             if (registered) try { manager?.unregisterNetworkCallback(callback) } catch (_: Exception) { }
             registered = false
             current = null

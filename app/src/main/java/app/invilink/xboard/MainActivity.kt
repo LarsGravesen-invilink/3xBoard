@@ -492,7 +492,9 @@ class MainActivity : FragmentActivity() {
                       Stage.INBOUND_SETTINGS -> {
                           BackHandler { model.cancelInboundSettings() }
                           InboundSettingsScreen(
-                              draft = state.inboundDraft,
+                               onKernelReady = model::amneziaKernelReady,
+                               onInstallKernel = model::installAmneziaKernel,
+                               draft = state.inboundDraft,
                               saving = state.inboundSaving,
                               error = state.inboundSaveError,
                               onField = model::updateInboundField,

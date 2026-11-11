@@ -512,7 +512,9 @@ internal class PanelApiCascadeGateway(
         require(it.id == id) { "Идентификатор панели не совпадает." }
     }
 
-    override suspend fun cleanup(metadata: CascadeMetadata) {
+    override suspend fun cleanup(metadata: CascadeMetadata) = cleanupSide(metadata, entry = true, exit = true)
+
+    internal suspend fun cleanupSide(metadata: CascadeMetadata, entry: Boolean, exit: Boolean) {
         check(!metadata.inFlight) { "Результат незавершённого запроса неизвестен; автоматическая очистка запрещена. Проверьте панели вручную." }
         // Existing inbounds are restored only when their current configuration still matches
         // the post-creation snapshot. Old journals deliberately fail closed.
@@ -566,16 +568,24 @@ internal class PanelApiCascadeGateway(
                 "Восстановление инбаунда не подтверждено; журнал сохранён."
             }
         }
-        if (!metadata.exitInboundCreated && metadata.exitInboundId != null)
+        if (exit && !metadata.exitInboundCreated && metadata.exitInboundId != null)
             restore(metadata.exitPanelId, metadata.exitInboundId, metadata.exitInboundSnapshot, metadata.exitExpectedSnapshot, metadata.exitClientName)
-        if (!metadata.entryInboundCreated && metadata.entryInboundId != null)
+        if (entry && !metadata.entryInboundCreated && metadata.entryInboundId != null)
             restore(metadata.entryPanelId, metadata.entryInboundId, metadata.entryInboundSnapshot, metadata.entryExpectedSnapshot, metadata.entryClientName)
-        if (metadata.step.ordinal >= CascadeStep.ROUTING.ordinal) {
-            val entry = config(metadata.entryPanelId)
-            api.removeCascadeRouting(entry, metadata.entryTag, metadata.outboundTag)
-            api.restartXrayForRouting(entry)
+        var routingFailure: Exception? = null
+        if (entry && metadata.step.ordinal >= CascadeStep.ROUTING.ordinal) {
+            try {
+                val entryPanel = config(metadata.entryPanelId)
+                api.removeCascadeRouting(entryPanel, metadata.entryTag, metadata.outboundTag)
+                api.restartXrayForRouting(entryPanel)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                routingFailure = failure
+            }
         }
         suspend fun removeInbound(panelId: String, id: Long?, tag: String, name: String) {
+            check(!privateName(name)) { "Скрытый инбаунд сохранён; проверьте его вручную." }
             val panel = config(panelId)
             val rows = api.offlineSnapshot(panel).first
             val row = cascadeCreatedInboundForDeletion(rows, id, tag, name) ?: return
@@ -587,14 +597,15 @@ internal class PanelApiCascadeGateway(
             api.offlineDelete(panel, actualId, null)
             check(api.inbounds(panel).none { it.id == actualId }) { "Удаление инбаунда не подтверждено." }
         }
-        if (metadata.exitInboundCreated && metadata.step.ordinal >= CascadeStep.EXIT_INBOUND.ordinal)
+        if (exit && metadata.exitInboundCreated && metadata.step.ordinal >= CascadeStep.EXIT_INBOUND.ordinal)
             removeInbound(metadata.exitPanelId, metadata.exitInboundId, metadata.exitTag, metadata.exitInboundName)
-        if (metadata.entryInboundCreated)
+        if (entry && metadata.entryInboundCreated)
             removeInbound(metadata.entryPanelId, metadata.entryInboundId, metadata.entryTag, metadata.entryInboundName)
-        if (!metadata.exitInboundCreated && metadata.step.ordinal >= CascadeStep.EXIT_INBOUND.ordinal)
+        if (exit && !metadata.exitInboundCreated && metadata.step.ordinal >= CascadeStep.EXIT_INBOUND.ordinal)
             restartAndCheck(metadata.exitPanelId)
-        if (!metadata.entryInboundCreated && metadata.step.ordinal < CascadeStep.ROUTING.ordinal)
+        if (entry && !metadata.entryInboundCreated && metadata.step.ordinal < CascadeStep.ROUTING.ordinal)
             restartAndCheck(metadata.entryPanelId)
+        routingFailure?.let { throw IllegalStateException("Очистка маршрутизации не подтверждена: ${it.message.orEmpty()}", it) }
         check(!metadata.inFlight) {
             "Результат незавершённого запроса неизвестен; журнал сохранён для ручной проверки."
         }
@@ -1175,6 +1186,20 @@ internal class CascadeSettingsSynchronizer(private val api: PanelApi, private va
 
 internal class CascadeCreationException(val metadata: CascadeMetadata, cause: Throwable) :
     Exception("Создание каскада остановлено на этапе ${metadata.step}; результат последней операции может быть неизвестен. Проверьте панели перед повтором.", cause)
+
+internal suspend fun cleanupCascadeSides(cleanup: suspend (Boolean) -> Unit): List<String> {
+    val failures = mutableListOf<String>()
+    for ((isEntry, label) in listOf(true to "входной", false to "выходной")) {
+        try {
+            cleanup(isEntry)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            failures.add("$label узел: ${failure.message ?: "очистка не подтверждена"}")
+        }
+    }
+    return failures
+}
 
 /** Orchestrates changes only through injected dependencies; it performs no network operations itself. */
 internal class CascadeService(private val gateway: CascadePanelGateway, private val journal: CascadeJournal) {

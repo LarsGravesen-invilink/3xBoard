@@ -121,8 +121,8 @@ private fun CascadeNodeCard(
     var confirming by remember(cascade.id) { mutableStateOf(false) }
     var confirmingForget by remember(cascade.id) { mutableStateOf(false) }
     if (confirmingForget) DeletionConfirmationDialog(
-        title = "Удалить запись незавершённой операции?",
-        warning = "На панелях ничего не будет удалено или восстановлено. Проверьте обе панели вручную. Снимки из журнала будут потеряны.",
+        title = "Удалить запись каскада с устройства?",
+        warning = "На серверах ничего не будет удалено или восстановлено. Инбаунды, клиенты и правила маршрутизации могут продолжить работать. Проверьте и при необходимости удалите их вручную на обеих панелях. Снимки из этой записи будут потеряны.",
         onConfirm = { confirmingForget = false; onForgetIncomplete(cascade) }, onDismiss = { confirmingForget = false },
     )
     var showSnapshot by remember(cascade.id, entry) { mutableStateOf(false) }
@@ -141,7 +141,7 @@ private fun CascadeNodeCard(
     )
     if (confirming) DeletionConfirmationDialog(
         title = if (cascade.inFlight) "Удалить запись незавершённой операции?" else "Удалить каскад?",
-        warning = if (cascade.inFlight) "На панелях ничего не будет удалено или восстановлено. Результат последнего запроса неизвестен; проверьте обе панели вручную. Снимки из этого журнала будут потеряны." else "Созданные каскадом инбаунды будут удалены вместе с подключениями их клиентов. Общие клиенты не удаляются целиком. Ранее существовавшие инбаунды восстанавливаются при отсутствии конфликтов. Скрытые инбаунды остаются, но могут перестать работать. Очистка не атомарна: при ошибке проверьте обе панели и журнал.",
+        warning = if (cascade.inFlight) "На панелях ничего не будет удалено или восстановлено. Результат последнего запроса неизвестен; проверьте обе панели вручную. Снимки из этого журнала будут потеряны." else "Запись всего каскада будет удалена с устройства. Приложение попытается очистить обе панели: созданные инбаунды удаляются вместе с их подключениями, общие клиенты целиком не удаляются. Если панель недоступна или проверка не пройдёт, данные на ней могут остаться — проверьте их вручную. Снимки из записи будут потеряны; очистка не атомарна.",
         onConfirm = { confirming = false; if (cascade.inFlight) onForgetIncomplete(cascade) else onDelete(cascade) }, onDismiss = { confirming = false },
     )
     Surface(
@@ -151,7 +151,7 @@ private fun CascadeNodeCard(
                 if (entry) cascade.entryClientName else cascade.exitClientName,
                 if (entry) cascade.entryTag else cascade.exitTag, readOnly = !complete))
         },
-        enabled = !busy && panel != null && inboundId != null,
+        enabled = !busy,
         modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp),
         color = palette.soft, border = BorderStroke(1.dp, palette.line),
     ) {

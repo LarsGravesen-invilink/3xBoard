@@ -206,6 +206,23 @@ class ServerManager(
     private fun protectionServers(servers: List<InstalledServer>): List<InstalledServer> =
         protectionServers(servers, protectionExclusions())
 
+    internal suspend fun installAwgKernel(panelId: String) {
+        check(canManage() && isOnline()) { "Для установки нужна активная сессия и сеть." }
+        val server = state.value.servers.singleOrNull { it.panelId == panelId }
+            ?: error("SSH-сервер не привязан к этой панели. Используйте консоль SSH.")
+        val credentials = server.credentials ?: error("SSH-данные не сохранены. Используйте консоль SSH.")
+        val ssh = SshConnection(store)
+        try {
+            val identity = ssh.connect(credentials)
+            check(matchesServer(identity, server) && identity.algorithm == server.hostKeyAlgorithm && identity.keyBase64 == server.hostKeyBase64) {
+                "Ключ SSH не совпадает с сохранённым. Команда не отправлена."
+            }
+            check(canManage() && isOnline() && state.value.servers.any { it == server }) { "Данные сервера или сессия изменились. Команда не отправлена." }
+            val result = ssh.execute("test \"\$(id -u)\" = 0 && /usr/local/x-ui/x-ui install-awg-kernel", timeoutMillis = 600_000, maxBytes = 65536)
+            check(result.exitCode == 0) { "Установка не подтверждена (код ${result.exitCode}). Проверьте сервер вручную; автоматически команда не повторяется." }
+        } finally { ssh.close() }
+    }
+
     fun prepareProtectionTools() = synchronized(lock) {
         if (mutableState.value.protectionInstallBusy || mutableState.value.busy || mutableState.value.webUiBusy) {
             mutableState.value = mutableState.value.copy(error = "Не удалось проверить iptables: выполняется другая операция.")

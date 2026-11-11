@@ -43,7 +43,7 @@ data class InboundDraft(
         }.getOrDefault(false)
 
     fun update(field: String, value: String): InboundDraft = when (field) {
-        "name" -> copy(name = value)
+        "name" -> copy(name = if (protocol == "amneziawg") normalizeAwgName(value) else value)
         "listen" -> copy(listen = value)
         "port" -> copy(port = value)
         "protocol" -> {
@@ -53,12 +53,21 @@ data class InboundDraft(
                 val settings = jsonObject(protocolSettings, "Настройки протокола")
                 require(canChangeProtocol) { "Нельзя менять протокол при наличии клиентов, учётных записей или peers." }
                 val defaults = defaults(value)
+                if (value == "amneziawg") {
+                    val server = defaults.getJSONObject("server")
+                    val random = java.security.SecureRandom()
+                    for (i in 0..3) server.put("h${i + 1}", (5L + i * 536_870_910L + random.nextInt(536_870_910)).toString())
+                }
                 val keys = defaults.keys()
                 while (keys.hasNext()) {
                     val key = keys.next()
                     if (!settings.has(key)) settings.put(key, defaults.get(key))
                 }
-                copy(protocol = value, protocolSettings = settings.toString(2))
+                copy(protocol = value, protocolSettings = settings.toString(2),
+                    port = if (value == "amneziawg" && port == "443") (10000 + java.security.SecureRandom().nextInt(50000)).toString() else port,
+                    security = if (value == "amneziawg") "none" else security,
+                    streamSettings = if (value == "amneziawg") JSONObject(streamSettings).put("security", "none").toString(2) else streamSettings,
+                    name = if (value == "amneziawg") normalizeClientName(name) else name)
             }
         }
         "network", "security" -> {
@@ -86,6 +95,11 @@ data class InboundDraft(
         "generate:shortId" -> generate("shortId")
         "generate:password" -> generate("password")
         "generate:tag" -> generate("tag")
+        else -> if (field.startsWith("awg:")) updateAwgField(field.substringAfter(':'), value)
+            else updateOtherField(field, value)
+    }
+
+    private fun updateOtherField(field: String, value: String): InboundDraft = when (field) {
         "settings:method", "settings:password", "settings:decryption" -> {
             val settings = jsonObject(protocolSettings, "Настройки протокола")
             settings.put(field.substringAfter(':'), value)
@@ -102,6 +116,23 @@ data class InboundDraft(
         else -> if (field.startsWith("sniffing:destOverride:")) updateSniffingField(field, value)
             else if (field in streamFields || field in certificateFields) updateStreamField(field, value)
             else throw IllegalArgumentException("Неизвестное поле инбаунда: $field")
+    }
+
+    private fun updateAwgField(key: String, value: String): InboundDraft {
+        require(protocol == "amneziawg")
+        val settings = jsonObject(protocolSettings, "Настройки протокола")
+        val server = settings.optJSONObject("server") ?: JSONObject().also { settings.put("server", it) }
+        when (key) {
+            in setOf("jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "mtu", "subnetCidr") -> {
+                val number = value.toLongOrNull()
+                if (number == null || number !in 0..4294967295L) return copy(fieldInputs = fieldInputs + ("awg:$key" to value))
+                server.put(key, number)
+            }
+            in setOf("kernelMode", "ipv6Enabled", "randomTrailers", "disableCookies") -> server.put(key, value.toBooleanStrict())
+            in setOf("h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5", "primaryDns", "secondaryDns", "subnetIp", "ipv6Subnet", "externalInterface", "ipv6ExternalInterface", "headerProtectionKey", "contentPaddingAddition", "rekeyAfterTime", "rekeyTimeout", "rejectAfterTime", "keepaliveTimeout", "maxHandshakeAttempts") -> server.put(key, value)
+            else -> throw IllegalArgumentException("Неизвестное поле AmneziaWG.")
+        }
+        return copy(protocolSettings = settings.toString(2), fieldInputs = fieldInputs - "awg:$key")
     }
 
     val currentSni: String
@@ -140,6 +171,7 @@ data class InboundDraft(
                 else -> throw IllegalArgumentException("Неизвестное поле sniffing.")
             }
         }
+        if (field.startsWith("awg:")) return jsonObject(protocolSettings, "Настройки протокола").optJSONObject("server")?.optString(field.substringAfter(':')).orEmpty()
         if (field == "tag") return jsonObject(extra, "Дополнительные поля").optString("tag")
         if (field.startsWith("settings:")) return jsonObject(protocolSettings, "Настройки протокола").optString(field.substringAfter(':'))
         val stream = jsonObject(streamSettings, "Настройки транспорта")
@@ -442,6 +474,21 @@ data class InboundDraft(
 
     private fun validateProtocol(settings: JSONObject) {
         when (protocol) {
+            "amneziawg" -> {
+                val server = requireNotNull(settings.optJSONObject("server")) { "Для AmneziaWG нужен объект server." }
+                fun number(key: String, min: Long, max: Long): Long {
+                    val value = server.opt(key)?.toString()?.toLongOrNull()
+                    require(value != null && value in min..max) { "Некорректное значение AmneziaWG: $key." }
+                    return value
+                }
+                number("mtu", 1, 65535)
+                number("jc", 0, 128)
+                val min = number("jmin", 0, 65535)
+                val max = number("jmax", 0, 65535)
+                require(min <= max) { "Jmin не может превышать Jmax." }
+                for ((key, limit) in mapOf("s1" to 1552L, "s2" to 1608L, "s3" to 1636L, "s4" to 32L)) number(key, 0, limit)
+                require(server.getLong("s1") + 56 != server.getLong("s2")) { "S1 + 56 не должно совпадать с S2." }
+            }
             "vless" -> {
                 require(settings.optString("decryption").isNotBlank()) { "Укажите decryption в настройках VLESS (обычно none)." }
                 val clients = settings.optJSONArray("clients")
@@ -604,8 +651,15 @@ data class InboundDraft(
             }
         }
 
+        private fun normalizeAwgName(value: String): String {
+            val normalized = normalizeClientName(value)
+            val prefix = Regex("^:([A-Za-z]{2})(?![A-Za-z:])").find(normalized) ?: return normalized
+            val flag = countryFlagForClientName(prefix.groupValues[1] + ":")
+            return if (flag.isEmpty()) normalized else flag + normalized.substring(prefix.value.length)
+        }
+
         val mainstreamProtocols: List<String> = listOf("vless", "vmess", "trojan", "shadowsocks")
-        val protocols: List<String> = mainstreamProtocols + listOf("dokodemo-door", "mixed")
+        val protocols: List<String> = mainstreamProtocols + listOf("amneziawg", "dokodemo-door", "mixed")
         val defaultSniCandidates: List<String> = listOf(
             "www.microsoft.com", "www.apple.com", "www.cloudflare.com", "www.amazon.com", "www.google.com",
             "www.bing.com", "www.wikipedia.org", "www.github.com", "www.mozilla.org", "www.samsung.com",
@@ -690,6 +744,7 @@ data class InboundDraft(
         }
 
         private fun defaults(protocol: String): JSONObject = JSONObject(when (protocol) {
+            "amneziawg" -> "{\"server\":{\"subnetIp\":\"10.8.1.0\",\"subnetCidr\":24,\"mtu\":1280,\"primaryDns\":\"8.8.8.8\",\"secondaryDns\":\"1.1.1.1\",\"jc\":5,\"jmin\":10,\"jmax\":50,\"s1\":30,\"s2\":45,\"s3\":10,\"s4\":5,\"h1\":\"1\",\"h2\":\"2\",\"h3\":\"3\",\"h4\":\"4\",\"i1\":\"\"},\"clients\":[]}"
             "vless" -> "{\"clients\":[],\"decryption\":\"none\",\"fallbacks\":[]}"
             "vmess" -> "{\"clients\":[]}"
             "trojan" -> "{\"clients\":[],\"fallbacks\":[]}"

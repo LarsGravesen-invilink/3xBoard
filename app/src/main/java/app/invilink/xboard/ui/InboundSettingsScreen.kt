@@ -31,6 +31,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -126,6 +129,8 @@ internal fun InboundSettingsScreen(
     onEnabled: (Boolean) -> Unit,
     onSave: () -> Unit,
     onBack: () -> Unit,
+    onKernelReady: suspend () -> Boolean? = { null },
+    onInstallKernel: suspend () -> Unit = {},
     cascadeEditor: CascadeEditorState? = null,
     onCascadeSave: () -> Unit = {},
 ) {
@@ -136,6 +141,40 @@ internal fun InboundSettingsScreen(
     val palette = LocalXBoardPalette.current
     var advanced by rememberSaveable(draft.id) { mutableStateOf(false) }
     var optional by rememberSaveable(draft.id) { mutableStateOf(false) }
+    var kernelReady by remember(draft.id) { mutableStateOf<Boolean?>(null) }
+    var kernelInstalling by remember { mutableStateOf(false) }
+    var kernelConfirm by remember { mutableStateOf(false) }
+    var kernelMessage by remember { mutableStateOf<String?>(null) }
+    val kernelScope = rememberCoroutineScope()
+    if (kernelConfirm) AlertDialog(
+        onDismissRequest = { kernelConfirm = false },
+        title = { Text("Установить компоненты ядра?") },
+        text = { Text("На привязанном сервере с сохранёнными SSH-данными будет запущена установка AmneziaWG. Она изменяет систему и может занять несколько минут. При обрыве связи результат может быть неизвестен; автоматического повтора не будет.") },
+        confirmButton = { BoardTextButton(onClick = {
+            kernelConfirm = false
+            kernelInstalling = true
+            kernelMessage = null
+            kernelScope.launch {
+                try {
+                    onInstallKernel()
+                    kotlinx.coroutines.delay(11_000)
+                    kernelReady = onKernelReady()
+                    kernelMessage = if (kernelReady == true) "Компоненты доступны." else "Установка завершилась, но готовность не подтверждена. Проверьте сервер вручную."
+                    if (kernelReady == true) onField("awg:kernelMode", "true")
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) { kernelMessage = failure.message ?: "Результат установки неизвестен. Проверьте сервер вручную." }
+                finally { kernelInstalling = false }
+            }
+        }) { Text("Установить") } },
+        dismissButton = { BoardTextButton(onClick = { kernelConfirm = false }) { Text("Отмена") } },
+    )
+    LaunchedEffect(draft.id, draft.protocol) {
+        kernelReady = null
+        if (draft.protocol == "amneziawg") {
+            kernelReady = onKernelReady()
+            if (draft.id == null && kernelReady == true && draft.fieldValue("awg:kernelMode") != "true") onField("awg:kernelMode", "true")
+        }
+    }
     var jsonPending by rememberSaveable(draft.id) { mutableStateOf(emptyList<String>()) }
     val onJsonPending: (String, Boolean) -> Unit = { field, pending ->
         jsonPending = if (pending) (jsonPending + field).distinct() else jsonPending - field
@@ -180,7 +219,7 @@ internal fun InboundSettingsScreen(
                 field = "protocol",
                 label = "Протокол",
                 value = draft.protocol,
-                choices = InboundDraft.mainstreamProtocols,
+                choices = InboundDraft.mainstreamProtocols + "amneziawg",
                 enabled = !saving && jsonPending.isEmpty() && draft.canChangeProtocol,
                 supporting = when {
                     draft.id != null -> "Протокол зафиксирован, чтобы сохранить клиентов."
@@ -200,8 +239,30 @@ internal fun InboundSettingsScreen(
                     else "TLS требует серверного сертификата; REALITY доступен только с совместимыми протоколом и транспортом.",
                     onField,
                 )
-            } else {
+            } else if (draft.protocol != "amneziawg") {
                 Text("Параметры этого протокола доступны в расширенных настройках; создание через упрощённую форму не предлагается.", style = MaterialTheme.typography.bodySmall)
+            }
+            if (draft.protocol == "amneziawg") {
+                if (kernelReady != null || draft.fieldValue("awg:kernelMode") == "true") {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Режим ядра", Modifier.weight(1f))
+                        Switch(checked = draft.fieldValue("awg:kernelMode") == "true", onCheckedChange = { onField("awg:kernelMode", it.toString()) }, enabled = !saving && (kernelReady == true || draft.fieldValue("awg:kernelMode") == "true"))
+                    }
+                    if (kernelReady == false) {
+                        Text("Компоненты ядра недоступны. Вручную через SSH: sudo /usr/local/x-ui/x-ui install-awg-kernel", style = MaterialTheme.typography.bodySmall)
+                        BoardTextButton(onClick = { kernelConfirm = true }, enabled = !saving && !kernelInstalling) { Text(if (kernelInstalling) "Установка…" else "Установить автоматически") }
+                    }
+                    kernelMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                }
+                listOf(
+                    "mtu" to "MTU", "primaryDns" to "Основной DNS", "secondaryDns" to "Резервный DNS",
+                    "jc" to "Jc · количество мусорных пакетов", "jmin" to "Jmin · минимальный размер", "jmax" to "Jmax · максимальный размер",
+                    "s1" to "S1 · init", "s2" to "S2 · response", "s3" to "S3 · cookie reply", "s4" to "S4 · transport",
+                    "h1" to "H1 · заголовок", "h2" to "H2 · заголовок", "h3" to "H3 · заголовок", "h4" to "H4 · заголовок",
+                    "i1" to "I1 · сигнатурный пакет",
+                ).forEach { (key, label) ->
+                    InboundSettingField("awg:$key", label, inboundFieldValue(draft, "awg:$key"), saving, onField, "")
+                }
             }
             if (draft.protocol == "shadowsocks") {
                 InboundSettingChoice(
@@ -240,7 +301,7 @@ internal fun InboundSettingsScreen(
                 }
                 InboundSecurityFields(draft, saving, onField, optional = false)
             }
-            InboundSniffingFields(draft, saving || "sniffing" in jsonPending, onField)
+            if (draft.protocol != "amneziawg") InboundSniffingFields(draft, saving || "sniffing" in jsonPending, onField)
             HorizontalDivider(color = palette.line)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BoardTextButton(onClick = { optional = !optional }, enabled = !saving && jsonPending.isEmpty(), modifier = Modifier.weight(1f)) {
@@ -251,6 +312,21 @@ internal fun InboundSettingsScreen(
                 }
             }
             if (optional) {
+                if (draft.protocol == "amneziawg") {
+                    listOf("subnetIp" to "IPv4 подсеть", "subnetCidr" to "IPv4 префикс", "externalInterface" to "Внешний интерфейс",
+                        "ipv6Subnet" to "IPv6 подсеть", "ipv6ExternalInterface" to "IPv6 интерфейс", "i2" to "I2", "i3" to "I3", "i4" to "I4", "i5" to "I5",
+                        "headerProtectionKey" to "Ключ защиты заголовка", "contentPaddingAddition" to "Дополнительный паддинг",
+                        "rekeyAfterTime" to "Rekey after time", "rekeyTimeout" to "Rekey timeout", "rejectAfterTime" to "Reject after time",
+                        "keepaliveTimeout" to "Keepalive timeout", "maxHandshakeAttempts" to "Попытки handshake").forEach { (key, label) ->
+                        InboundSettingField("awg:$key", label, inboundFieldValue(draft, "awg:$key"), saving, onField, "")
+                    }
+                    listOf("ipv6Enabled" to "IPv6", "randomTrailers" to "Случайные трейлеры", "disableCookies" to "Отключить cookies").forEach { (key, label) ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(label, Modifier.weight(1f))
+                            Switch(checked = inboundFieldValue(draft, "awg:$key") == "true", onCheckedChange = { onField("awg:$key", it.toString()) }, enabled = !saving)
+                        }
+                    }
+                }
                 InboundSettingField(
                     "listen", "Адрес прослушивания", draft.listen, saving, onField,
                     "Пусто — все интерфейсы. Для локального доступа: 127.0.0.1 или ::1.",

@@ -1006,7 +1006,7 @@ private fun CascadeHomeCard(cascade: CascadeMetadata, panels: List<PanelSummary>
     }
     val interNodeLatency = if (health != null) health.latencyMillis else initialLatency
     var confirming by remember(cascade.id) { mutableStateOf(false) }
-    if (confirming) DeletionConfirmationDialog("Удалить каскад?", "Созданные каскадом инбаунды будут удалены вместе с подключениями их клиентов. Общие клиенты не удаляются целиком. Ранее существовавшие инбаунды восстанавливаются при отсутствии конфликтов. Скрытые инбаунды остаются, но могут перестать работать. Очистка не атомарна; при ошибке проверьте панели и журнал.",
+    if (confirming) DeletionConfirmationDialog("Удалить каскад?", "Запись всего каскада будет удалена с устройства. Приложение попытается очистить обе панели; созданные инбаунды удаляются вместе с подключениями их клиентов. Если панель недоступна или проверка не пройдёт, данные на ней могут остаться — проверьте их вручную. Снимки из записи будут потеряны; очистка не атомарна.",
         onConfirm = { confirming = false; onDelete() }, onDismiss = { confirming = false })
     val shape = RoundedCornerShape(17.dp)
     val cascadeAvailability = when {

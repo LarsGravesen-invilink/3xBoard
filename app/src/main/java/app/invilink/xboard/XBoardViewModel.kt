@@ -598,7 +598,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         mutableCascade.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
             try {
-                check(sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) { "Для удаления нужна активная сессия и сеть." }
+                check(sessionActive() && !mutableState.value.stealthMode) { "Для удаления нужна активная сессия." }
                 check(repository.pendingCount() == 0) { "Сначала синхронизируйте ожидающие изменения панелей." }
                 check(recoveryJournal.load() == null) { "Сначала проверьте и подтвердите журнал восстановления синхронизации." }
                 val stored = checkNotNull(cascadeJournal.get(metadata.id)) { "Каскад не найден." }
@@ -606,11 +606,18 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                     check(sessionActive() && connectivity.online.value) { "Сессия закрыта или сеть недоступна." }
                     panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == id }) { "Панель не найдена." } }
                 })
+                val failures = mutableListOf<String>()
                 cascadeRecoveryLock.withLock {
                     check(recoveryJournal.load() == null) { "Сначала проверьте и подтвердите журнал восстановления синхронизации." }
-                    CascadeService(gateway, cascadeJournal).remove(stored)
+                    check(!stored.inFlight) { "Результат незавершённой операции неизвестен; проверьте панели вручную." }
+                    failures.addAll(app.invilink.xboard.panels.cleanupCascadeSides { isEntry ->
+                        gateway.cleanupSide(stored, entry = isEntry, exit = !isEntry)
+                    })
+                    check(sessionActive() && !mutableState.value.stealthMode) { "Сессия закрыта; запись сохранена." }
+                    cascadeJournal.remove(stored.id)
                 }
-                mutableCascade.update { it.copy(busy = false, history = it.history.filterNot { item -> item.id == metadata.id }, metadata = null) }
+                mutableCascade.update { it.copy(busy = false, history = it.history.filterNot { item -> item.id == metadata.id }, metadata = null,
+                    error = if (failures.isEmpty()) null else "Запись каскада удалена с устройства. Очистка на панелях не подтверждена: ${failures.joinToString("; ")}. Проверьте указанные панели вручную; после тайм-аута запрос мог выполниться позже.") }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -2067,6 +2074,20 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
     private fun withSavedSniCandidates(draft: InboundDraft): InboundDraft =
         preferences.getString("inbound_sni_candidates", null)?.let { draft.copy(sniCandidates = it.split('\n')) } ?: draft
 
+    internal suspend fun installAmneziaKernel() {
+        check(foreground && sessionActive() && !mutableState.value.stealthMode) { "Сессия закрыта." }
+        val panelId = checkNotNull(mutableState.value.activePanelId)
+        serverManager.installAwgKernel(panelId)
+    }
+
+    internal suspend fun amneziaKernelReady(): Boolean? {
+        val config = panelConfigs.firstOrNull { it.id == mutableState.value.activePanelId } ?: return null
+        if (!sessionActive() || !connectivity.online.value) return null
+        return try { panelApi.amneziaKernelReady(config) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
+    }
+
     fun addInbound() {
         if (blockStealthOperation()) return
         val current = mutableState.value
@@ -2215,6 +2236,9 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         inboundSaveJob = viewModelScope.launch {
             try {
                 val online = panelConnectionAllowed(config)
+                if (prepared.protocol == "amneziawg" && prepared.fieldValue("awg:kernelMode") == "true") {
+                    check(online && panelApi.amneziaKernelReady(config)) { "Режим ядра недоступен. Проверьте компоненты и повторите попытку." }
+                }
                 val cascadeEdit = cascadeInboundEdit
                 if (cascadeEdit != null) {
                     val target = cascadeEdit.first
@@ -2807,6 +2831,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
 
     fun onForeground() {
         foreground = true
+        connectivity.refresh()
         val now = SystemClock.elapsedRealtime()
         val away = backgroundAt?.let { if (now < it) Long.MAX_VALUE else now - it }
         backgroundAt = null

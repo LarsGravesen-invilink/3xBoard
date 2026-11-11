@@ -118,6 +118,14 @@ class PanelApi {
         }
     }
 
+    internal suspend fun amneziaKernelReady(config: PanelConfig): Boolean = withContext(Dispatchers.IO) {
+        val validated = PanelValidation.validate(config)
+        val value = request(validated, "panel/api/inbounds/amneziawgKernelReadiness", System.nanoTime() + 8_000_000_000L, 5_000) as? JSONObject
+            ?: throw IllegalStateException("Ответ проверки ядра не распознан.")
+        require(value.opt("ready") is Boolean) { "Ответ проверки ядра не содержит состояния." }
+        value.getBoolean("ready")
+    }
+
     internal suspend fun webUiPort(config: PanelConfig): Int = withContext(Dispatchers.IO) {
         val validated = PanelValidation.validate(config)
         val deadline = System.nanoTime() + TOTAL_TIMEOUT_MILLIS * 1_000_000
