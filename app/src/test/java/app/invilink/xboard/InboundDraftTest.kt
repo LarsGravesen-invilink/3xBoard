@@ -11,6 +11,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InboundDraftTest {
+    @Test fun acceptsExplicitNullOptionalSettingsWithoutWeakeningRequiredFields() {
+        for (protocol in listOf("vless", "vmess", "trojan", "amneziawg")) {
+            val row = InboundDraft.create().update("protocol", protocol).payload().put("id", 42)
+                .put("streamSettings", JSONObject.NULL).put("sniffing", JSONObject.NULL).put("allocate", JSONObject.NULL)
+            app.invilink.xboard.panels.validateFullInbound(row)
+            val parsed = InboundDraft.fromRaw(row.toString())
+            assertEquals(protocol, parsed.protocol)
+            assertTrue(parsed.matchesServer(row.toString()))
+            val missing = JSONObject(row.toString()).apply { remove("settings") }
+            assertThrows(IllegalArgumentException::class.java) { app.invilink.xboard.panels.validateFullInbound(missing) }
+            val malformed = JSONObject(row.toString()).put("streamSettings", "[]")
+            assertThrows(Exception::class.java) { app.invilink.xboard.panels.validateFullInbound(malformed) }
+            val absent = JSONObject(row.toString()).apply { remove("sniffing") }
+            assertThrows(IllegalArgumentException::class.java) { app.invilink.xboard.panels.validateFullInbound(absent) }
+        }
+    }
     @Test fun amneziaDefaultsAndEditableSettings() {
         val draft = InboundDraft.create().update("protocol", "amneziawg").update("name", ":RU test")
         val server = JSONObject(draft.payload().getString("settings")).getJSONObject("server")

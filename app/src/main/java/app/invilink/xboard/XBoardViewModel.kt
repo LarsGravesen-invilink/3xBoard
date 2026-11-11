@@ -2128,7 +2128,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                     val entries = cascadeJournal.entries()
                     check(entries.none { app.invilink.xboard.panels.cascadeOwnsInbound(it, config.id, id) }) { "Инбаунд управляется каскадом." }
                 }
-                val draft = repository.inboundDraft(config, id, panelConnectionAllowed(config) && currentDetailLoadOnline)
+                val draft = repository.inboundDraft(config, id, panelConnectionAllowed(config))
                 if (target != null) {
                     val settings = JSONObject(draft.protocolSettings)
                     val clients = checkNotNull(settings.optJSONArray("clients")) { "Список клиентов недоступен." }
@@ -2148,10 +2148,15 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
                 if (generation == detailGeneration) mutableState.update { it.copy(detailsError = if (target != null)
                     "Не удалось открыть настройки: проверьте соединение, ID, имя, тег и наличие клиента из журнала."
-                    else "Не удалось получить актуальные настройки инбаунда. Проверьте соединение и разрешения токена.") }
+                    else when (failure) {
+                        is app.invilink.xboard.panels.PanelApiFailure -> failure.message ?: "Панель не ответила на запрос инбаунда."
+                        is OfflinePanelStoreException -> "Не удалось прочитать или сохранить локальные данные инбаунда."
+                        is IllegalArgumentException, is org.json.JSONException -> "Панель вернула настройки инбаунда в неподдерживаемом или неполном формате. Данные не изменены."
+                        else -> "Не удалось получить настройки инбаунда. Проверьте доступность панели и повторите попытку."
+                    }) }
             } finally {
                 if (generation == detailGeneration) mutableState.update { it.copy(detailsLoading = false) }
             }

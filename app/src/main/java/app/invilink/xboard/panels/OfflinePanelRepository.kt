@@ -43,6 +43,29 @@ private inline fun safeRequire(condition: Boolean, message: () -> String = { "Н
 
 private fun safeError(message: String): Nothing = throw RepositoryFailure(message)
 
+internal fun validateFullInbound(raw: JSONObject) {
+    safeRequire(listOf("id", "remark", "listen", "port", "protocol", "enable", "total", "expiryTime", "settings", "streamSettings", "sniffing")
+        .all { raw.has(it) } && listOf("id", "remark", "listen", "port", "protocol", "enable", "total", "expiryTime", "settings")
+        .all { !raw.isNull(it) }) { "Сервер не вернул полные настройки инбаунда. Редактирование недоступно." }
+    safeRequire(raw.opt("enable") is Boolean && listOf("remark", "listen", "protocol").all { raw.opt(it) is String } &&
+        listOf("id", "port", "total", "expiryTime").all { raw.opt(it) is Number }) {
+        "Сервер вернул неверные типы полей инбаунда. Редактирование недоступно."
+    }
+    safeRequire(listOf("id", "port", "total", "expiryTime").all {
+        BigDecimal(raw.get(it).toString()).longValueExact() >= 0
+    } && raw.getLong("id") > 0 && raw.getLong("port") in 1L..65535L) {
+        "Сервер вернул некорректные числовые поля инбаунда. Редактирование недоступно."
+    }
+    listOf("settings", "streamSettings", "sniffing", "allocate").forEach { key ->
+        if (raw.has(key) && !raw.isNull(key)) when (val value = raw.get(key)) {
+            is JSONObject -> Unit
+            is String -> if (value.isNotBlank()) JSONObject(value) else Unit
+            else -> safeError("Полные настройки в формате JSON недоступны.")
+        }
+    }
+    InboundDraft.fromRaw(raw.toString())
+}
+
 class OfflinePanelRepository(context: Context, private val api: PanelApi) {
     private val store = OfflinePanelStore(context)
     val revision: StateFlow<Long> = changes.asStateFlow()
@@ -1446,22 +1469,7 @@ class OfflinePanelRepository(context: Context, private val api: PanelApi) {
         false
     }
 
-    private fun requireFullInbound(raw: JSONObject) {
-        safeRequire(listOf("id", "remark", "listen", "port", "protocol", "enable", "total", "expiryTime", "settings", "streamSettings", "sniffing")
-            .all { raw.has(it) && !raw.isNull(it) }) { "Сервер не вернул полные настройки инбаунда. Редактирование недоступно." }
-        safeRequire(raw.opt("enable") is Boolean && listOf("remark", "listen", "protocol").all { raw.opt(it) is String } &&
-            listOf("id", "port", "total", "expiryTime").all { raw.opt(it) is Number }) {
-            "Сервер вернул неверные типы полей инбаунда. Редактирование недоступно."
-        }
-        safeRequire(listOf("id", "port", "total", "expiryTime").all {
-            BigDecimal(raw.get(it).toString()).longValueExact() >= 0
-        } && raw.getLong("id") > 0 && raw.getLong("port") in 1L..65535L) {
-            "Сервер вернул некорректные числовые поля инбаунда. Редактирование недоступно."
-        }
-        listOf("settings", "streamSettings", "sniffing").forEach { nested(raw.get(it)) }
-        if (raw.has("allocate")) nested(raw.get("allocate"))
-        InboundDraft.fromRaw(raw.toString())
-    }
+    private fun requireFullInbound(raw: JSONObject) = validateFullInbound(raw)
 
     private fun nested(value: Any?): JSONObject = when (value) {
         is JSONObject -> copy(value)
