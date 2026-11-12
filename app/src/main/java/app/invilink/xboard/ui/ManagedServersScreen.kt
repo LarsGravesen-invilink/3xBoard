@@ -1164,11 +1164,13 @@ internal fun ServerActionConfirmationDialog(
     busy: Boolean,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    confirmLabel: String = "Подтвердить",
+    dismissLabel: String = "Отмена",
 ) {
     ServerUiSecureDialog(title, busy, onDismiss) {
         ServerUiNotice("Подтвердите действие", warning, warning = true)
-        ServerUiPrimaryButton("Подтвердить", onConfirm, enabled = !busy, busy = busy)
-        ServerUiGenerate("Отмена", !busy, onDismiss)
+        ServerUiPrimaryButton(confirmLabel, onConfirm, enabled = !busy, busy = busy)
+        ServerUiGenerate(dismissLabel, !busy, onDismiss)
     }
 }
 

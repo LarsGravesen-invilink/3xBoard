@@ -209,6 +209,8 @@ class MainActivity : FragmentActivity() {
                     launchUpdateInstaller()
                 }
             }
+            var sshOnlyControlId by remember { mutableStateOf<String?>(null) }
+            var sshOnlyDeleteConfirm by remember { mutableStateOf(false) }
             var routingPanelId by remember { mutableStateOf<String?>(null) }
             var counterPanelId by remember { mutableStateOf<String?>(null) }
             var sidebarAdministration by remember { mutableStateOf(false) }
@@ -370,15 +372,28 @@ class MainActivity : FragmentActivity() {
                              }
                              panel.copy(displayAddress = sshAddress?.takeIf { it.isNotBlank() } ?: panelAddress,
                                  webUiHidden = panel.id in state.serverState.webUiHidden && panel.metrics.availability != app.invilink.xboard.panels.PanelAvailability.ONLINE)
-                         },
-                         refreshing = state.panelRefreshing,
+                          } + if (state.stealthMode) emptyList() else state.serverState.sshOnlyServers.map { server ->
+                              app.invilink.xboard.panels.PanelSummary(id = server.id, name = server.name.ifBlank { server.identity.host },
+                                  displayAddress = server.identity.host, sshOnly = true,
+                                  location = state.serverState.sshOnlyLocations[server.id],
+                                  sshPanelStatus = when (state.serverState.sshOnlyPanelStatus[server.id]) {
+                                      app.invilink.xboard.ssh.PanelInstallationState.ABSENT -> "На сервере не установлена 3x-ui"
+                                      app.invilink.xboard.ssh.PanelInstallationState.PRESENT -> "Обнаружена установка 3x-UI"
+                                      else -> "Состояние 3x-UI не подтверждено"
+                                  })
+                          },
+                          refreshing = state.panelRefreshing,
                         refreshResult = state.panelRefreshResult,
                         selectedPage = state.selectedPage,
                          onPageChanged = model::selectPage,
                          onVisiblePanelsChanged = model::setVisiblePanels,
                            onOpenPanel = { cascadeTarget = null; model.openPanel(it) },
                            offline = state.offline,
-                            onServerSettings = { id -> sidebarAdministration = false; model.openServerControls(id) },
+                            onServerSettings = { id ->
+                                sidebarAdministration = false
+                                if (state.serverState.sshOnlyServers.any { it.id == id }) sshOnlyControlId = id
+                                else model.openServerControls(id)
+                            },
                              quickAccessEnabled = quickMenuEnabled && !state.stealthMode && !state.settingsMenuOpen && !protectionMenuOpen &&
                                 apiAdministrationPanelId == null && state.serverState.controlPanelId == null &&
                                 routingPanelId == null && counterPanelId == null,
@@ -764,6 +779,62 @@ class MainActivity : FragmentActivity() {
                      val manager = model.serverManager
                      serverState.hostTrust?.let {
                          HostTrustDialog(it, manager::trustHost, manager::dismissTrust)
+                     }
+                        if (sshOnlyControlId != null) {
+                            val ssh = serverState.sshOnlyServers.firstOrNull { it.id == sshOnlyControlId }
+                            if (ssh == null) sshOnlyControlId = null
+                            else androidx.compose.material3.AlertDialog(
+                                onDismissRequest = { sshOnlyControlId = null },
+                                title = { Text("SSH-сервер") },
+                                text = { androidx.compose.foundation.layout.Column {
+                                    Text("Управление SSH-подключением")
+                                    androidx.compose.material3.TextButton(enabled = !serverState.busy, onClick = {
+                                        model.openSshOnlyInstaller(ssh.id); sshOnlyControlId = null
+                                    }) { Text("Установить 3x-UI") }
+                                } },
+                                confirmButton = { androidx.compose.material3.TextButton(onClick = {
+                                    manager.openSshOnlyConsole(ssh.id); sshOnlyControlId = null
+                                }) { Text("Консоль") } },
+                                dismissButton = { androidx.compose.material3.TextButton(onClick = { sshOnlyDeleteConfirm = true }) { Text("Удалить") } },
+                            )
+                        }
+                        if (sshOnlyDeleteConfirm) {
+                            androidx.compose.material3.AlertDialog(
+                                onDismissRequest = { sshOnlyDeleteConfirm = false },
+                                title = { Text("Удалить SSH-подключение?") },
+                                text = { Text("Подключение и сохранённые SSH-данные будут удалены с устройства. Сервер не изменится.") },
+                                confirmButton = { androidx.compose.material3.TextButton(onClick = {
+                                    sshOnlyDeleteConfirm = false
+                                    sshOnlyControlId?.let(manager::removeSshOnly)
+                                    sshOnlyControlId = null
+                                }) { Text("Удалить") } },
+                                dismissButton = { androidx.compose.material3.TextButton(onClick = { sshOnlyDeleteConfirm = false }) { Text("Отмена") } },
+                            )
+                        }
+                        serverState.sshOnlyServers.firstOrNull { it.id == serverState.sshOnlyConsoleId }?.let { ssh ->
+                            val display = app.invilink.xboard.ssh.InstalledServer(
+                                panelId = ssh.id, sshHost = ssh.identity.host, sshPort = ssh.identity.port,
+                                sshUsername = ssh.credentials.username, hostKeyAlgorithm = ssh.identity.algorithm,
+                                hostKeyBase64 = ssh.identity.keyBase64, panelUsername = "", panelPassword = "", panelPort = 0,
+                                panelUrl = "", token = "", secretPath = "", sslMode = app.invilink.xboard.ssh.SslMode.IP,
+                                certificateTarget = ssh.identity.host)
+                            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                                ServerConsoleScreen(server = display, busy = serverState.busy, awaitingCredentials = false,
+                                    output = serverState.consoleOutput, outputTruncated = serverState.consoleOutputTruncated,
+                                    error = serverState.error, active = serverState.consoleActive,
+                                    awaitingOutput = false, deadlineElapsed = null,
+                                    onSend = { text, confirmed, encoding -> confirmed && encoding == "UTF-8" && manager.sendSshOnlyConsole(text) },
+                                    onInterrupt = manager::consoleInterrupt, onBack = manager::closeSshOnlyConsole)
+                            }
+                        }
+                        serverState.sshOnlyCandidate?.let {
+                         androidx.compose.material3.AlertDialog(
+                             onDismissRequest = { },
+                             title = { Text("3x-UI не установлена") },
+                             text = { Text("На этом сервере не установлена панель 3x-UI. Будет добавлено подключение по SSH. Хотите ли Вы установить 3x-UI на этот сервер прямо сейчас?") },
+                             confirmButton = { androidx.compose.material3.TextButton(enabled = !serverState.busy, onClick = { manager.confirmSshOnlyCandidate(true) }) { Text("Установить сейчас") } },
+                             dismissButton = { androidx.compose.material3.TextButton(enabled = !serverState.busy, onClick = { manager.confirmSshOnlyCandidate(false) }) { Text("Позже") } },
+                         )
                      }
                      serverState.confirmation?.let {
                          ServerActionConfirmationDialog(

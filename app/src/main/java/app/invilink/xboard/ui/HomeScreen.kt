@@ -1123,6 +1123,26 @@ private fun PanelCard(
     loadPanelInbounds: suspend (String) -> List<app.invilink.xboard.panels.InboundDetail>?,
 ) {
     val palette = LocalXBoardPalette.current
+    if (panel.sshOnly) {
+        Column(modifier.clip(RoundedCornerShape(17.dp)).background(palette.soft)
+            .border(1.dp, palette.line, RoundedCornerShape(17.dp))
+            .clickable { onServerSettings(panel.id) }.padding(12.dp),
+            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(panel.name, style = MaterialTheme.typography.titleSmall, color = palette.foreground, textAlign = TextAlign.Center)
+            if (!panel.displayAddress.isNullOrBlank() && panel.displayAddress != panel.name)
+                Text(panel.displayAddress, style = MaterialTheme.typography.bodySmall, color = palette.secondary, textAlign = TextAlign.Center)
+            panel.location?.let { location ->
+                val country = java.util.Locale("", location.countryCode).getDisplayCountry(java.util.Locale("ru"))
+                    .ifBlank { location.countryName }
+                Text(listOf(location.countryFlag, country).filter { it.isNotBlank() }.joinToString(" "),
+                    style = MaterialTheme.typography.bodySmall, color = palette.secondary, textAlign = TextAlign.Center)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(panel.sshPanelStatus ?: "Состояние 3x-UI не подтверждено", style = MaterialTheme.typography.bodySmall,
+                color = palette.secondary, textAlign = TextAlign.Center)
+        }
+        return
+    }
     if (panel.webUiHidden) {
         HiddenPanelCard(modifier, panel.name)
         return

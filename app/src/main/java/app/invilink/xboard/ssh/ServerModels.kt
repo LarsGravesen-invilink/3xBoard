@@ -127,6 +127,8 @@ data class InstallOptions(
     }
 }
 
+enum class PanelInstallationState { PRESENT, ABSENT, UNKNOWN }
+
 data class ServerPreflight(
     val os: String,
     val architecture: String,
@@ -140,8 +142,18 @@ data class ServerPreflight(
     val existingInstallation: Boolean = false,
     val checkedPanelPort: Int? = null,
     val installedVersion: String? = null,
+    val installationState: PanelInstallationState = PanelInstallationState.UNKNOWN,
 ) {
     val ready: Boolean get() = rootChecked && platformChecked && root && supported && conflicts.isEmpty()
+}
+
+data class SshOnlyCard(val id: String, val name: String, val address: String)
+
+internal fun SshOnlyServer.toCard(): SshOnlyCard = SshOnlyCard(id, name.ifBlank { identity.host }, identity.host)
+
+data class SshOnlyServer(val id: String, val name: String, val credentials: SshCredentials, val identity: SshHostIdentity,
+    val autoImportStarted: Boolean = false) {
+    override fun toString(): String = "SshOnlyServer(id=$id, name=$name, credentials=<скрыто>, identity=<скрыто>)"
 }
 
 data class InstalledServer(

@@ -34,6 +34,8 @@ data class PanelSummary(
     val sshManaged: Boolean = false,
     val displayAddress: String? = null,
     val webUiHidden: Boolean = false,
+    val sshOnly: Boolean = false,
+    val sshPanelStatus: String? = null,
 )
 
 data class PanelLocation(val countryCode: String, val countryName: String, val city: String?) {

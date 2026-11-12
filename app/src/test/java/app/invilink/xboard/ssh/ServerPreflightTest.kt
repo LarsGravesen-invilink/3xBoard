@@ -10,6 +10,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServerPreflightTest {
+    @Test fun installationStateDoesNotTreatFailedOrUnprivilegedChecksAsAbsence() {
+        assertEquals(PanelInstallationState.PRESENT, parse(output(installation = "present")).installationState)
+        assertEquals(PanelInstallationState.ABSENT, parse(output(installation = "absent")).installationState)
+        assertEquals(PanelInstallationState.UNKNOWN, parse(output(uid = "1000")).installationState)
+        assertEquals(PanelInstallationState.UNKNOWN, parse(output(), exitCode = 1).installationState)
+        assertEquals(PanelInstallationState.UNKNOWN, parse(output().replace("install\tabsent", "install\tabsent\nconflict\tcheck:installation")).installationState)
+    }
     @Test
     fun protectionInstallErrorsDistinguishRootAndAptFailures() {
         assertTrue(protectionInstallError(10).contains("root"))
@@ -82,6 +89,7 @@ class ServerPreflightTest {
         assertTrue(result.platformChecked)
         assertTrue(result.supported)
         assertFalse(result.existingInstallation)
+        assertEquals(PanelInstallationState.ABSENT, result.installationState)
         assertEquals("Ubuntu 22.04", result.os)
         assertEquals("x86_64", result.architecture)
         assertTrue(result.conflicts.isEmpty())

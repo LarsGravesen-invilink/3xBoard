@@ -166,6 +166,12 @@ internal fun parseSshPreflight(
         conflicts = conflicts.toList(),
         warnings = warnings.toList(),
         existingInstallation = installation == true,
+        installationState = when {
+            !checksComplete || !root || "conflict\tcheck:installation" in seen -> PanelInstallationState.UNKNOWN
+            installation == true -> PanelInstallationState.PRESENT
+            installation == false -> PanelInstallationState.ABSENT
+            else -> PanelInstallationState.UNKNOWN
+        },
         installedVersion = release?.takeIf { checksComplete && installation == true && it != "unknown" },
         checkedPanelPort = panelPort,
         root = root,

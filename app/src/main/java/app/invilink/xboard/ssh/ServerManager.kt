@@ -102,8 +102,14 @@ data class ServerManagerState(
     val webUiHidden: Set<String> = emptySet(),
     val webUiPending: Set<String> = emptySet(),
     val servers: List<InstalledServer> = emptyList(),
+    val sshOnlyServers: List<SshOnlyServer> = emptyList(),
+    val sshOnlyPanelStatus: Map<String, PanelInstallationState> = emptyMap(),
+    val sshOnlyLocations: Map<String, app.invilink.xboard.panels.PanelLocation> = emptyMap(),
     val installer: InstallerState = InstallerState(),
     val importMode: Boolean = false,
+    val sshOnlyCandidate: SshOnlyServer? = null,
+    val sshOnlySavedInstall: Boolean? = null,
+    val sshOnlyConsoleId: String? = null,
     val hostTrust: SshHostIdentity? = null,
     val controlPanelId: String? = null,
     val confirmation: ServerConfirmation? = null,
@@ -129,6 +135,11 @@ private data class WebUiRecord(val panelId: String, val host: String, val sshPor
         server.sshPort == sshPort && server.hostKeyAlgorithm == algorithm && server.hostKeyBase64 == hostKey
     fun json(): org.json.JSONObject = org.json.JSONObject().put("id", panelId).put("host", host).put("ssh", sshPort)
         .put("port", panelPort).put("algorithm", algorithm).put("key", hostKey).put("confirmed", confirmed)
+}
+
+internal fun requireSshOnlyIdentity(expected: SshOnlyServer, current: SshOnlyServer?, actual: SshHostIdentity) {
+    check(current == expected) { "SSH-подключение изменилось или удалено; команда не отправлена." }
+    check(actual == expected.identity) { "Ключ SSH не соответствует сохранённому серверу. Команда не отправлена." }
 }
 
 private class ConsoleException(message: String) : IllegalStateException(message)
@@ -182,6 +193,7 @@ class ServerManager(
 ) {
     private val lock = Any()
     private val store = ServerStore(context.applicationContext ?: context)
+    private val sshLocationResolver = app.invilink.xboard.panels.PanelLocationResolver()
     private val connection = SshConnection(store)
     private var runner = ThreeXInstaller(connection)
     private var maintenance = ThreeXMaintenance(connection)
@@ -392,9 +404,73 @@ class ServerManager(
 
     fun load() = synchronized(lock) {
         startTask("Не удалось открыть защищённое хранилище серверов. Данные не изменены.") { ticket ->
-            val servers = withContext(Dispatchers.IO) { store.load() }
-            publish(ticket) { it.copy(servers = servers) }
+            val (servers, sshOnly) = withContext(Dispatchers.IO) { store.load() to store.loadSshOnly() }
+            publish(ticket) { it.copy(servers = servers, sshOnlyServers = sshOnly) }
         }
+    }
+
+    private suspend fun prepareSshOnlyCandidate(ticket: Long, credentials: SshCredentials, identity: SshHostIdentity, preflight: ServerPreflight) {
+        check(preflight.installationState == PanelInstallationState.ABSENT) { "Отсутствие 3x-UI не подтверждено." }
+        val existing = withContext(Dispatchers.IO) { store.loadSshOnly() }
+            .firstOrNull { it.identity.host == identity.host && it.identity.port == identity.port }
+        checkCurrent(ticket)
+        val candidate = SshOnlyServer(existing?.id ?: java.util.UUID.randomUUID().toString(),
+            existing?.name ?: credentials.host, credentials, identity, existing?.autoImportStarted ?: false)
+        publish(ticket) { it.copy(sshOnlyCandidate = candidate, message = null,
+            installer = it.installer.copy(preflight = preflight, hostIdentity = identity, connected = true)) }
+    }
+
+    fun acknowledgeSshOnlySaved() = synchronized(lock) {
+        mutableState.value = mutableState.value.copy(sshOnlySavedInstall = null)
+    }
+
+    fun discardSshOnlyCandidate() = synchronized(lock) {
+        if (mutableState.value.busy) return@synchronized
+        mutableState.value = mutableState.value.copy(sshOnlyCandidate = null)
+    }
+
+    fun confirmSshOnlyCandidate(installNow: Boolean) = synchronized(lock) {
+        if (mutableState.value.busy || !canManage()) return@synchronized
+        val candidate = mutableState.value.sshOnlyCandidate ?: return@synchronized
+        startTask("Не удалось сохранить SSH-подключение. Повторите проверку.") { ticket ->
+            checkCurrent(ticket)
+            val servers = withContext(Dispatchers.IO) {
+                store.upsertSshOnly(candidate)
+                store.loadSshOnly()
+            }
+            publish(ticket) { state ->
+                state.copy(sshOnlyCandidate = null, sshOnlyServers = servers, sshOnlySavedInstall = installNow, importMode = if (installNow) false else state.importMode,
+                    message = "SSH-подключение сохранено.", installer = state.installer.copy(
+                        preflightOpen = installNow, connected = installNow, hostIdentity = if (installNow) candidate.identity else null))
+            }
+            if (installNow) checkRelease()
+        }
+    }
+
+    fun removeSshOnly(id: String) = synchronized(lock) {
+        if (mutableState.value.busy || !canManage()) return@synchronized
+        val server = mutableState.value.sshOnlyServers.singleOrNull { it.id == id } ?: return@synchronized
+        startTask("Не удалось удалить SSH-подключение. Данные сохранены.") { ticket ->
+            val remaining = withContext(Dispatchers.IO) {
+                store.removeSshOnly(server)
+                store.loadSshOnly()
+            }
+            publish(ticket) { it.copy(sshOnlyServers = remaining, message = "SSH-подключение удалено с устройства.") }
+        }
+    }
+
+    fun beginSshOnlyInstall(id: String): Boolean = synchronized(lock) {
+        if (!canManage() || mutableState.value.busy || installing) return@synchronized false
+        val server = mutableState.value.sshOnlyServers.singleOrNull { it.id == id } ?: return@synchronized false
+        resetWizard()
+        releaseGeneration++
+        releaseJob?.cancel()
+        releaseJob = null
+        release = null
+        mutableState.value = mutableState.value.copy(installer = InstallerState(credentials = server.credentials))
+        checkRelease()
+        connectDraft(server.credentials)
+        true
     }
 
     fun beginInstall() = synchronized(lock) {
@@ -450,7 +526,7 @@ class ServerManager(
         verifiedPanelName = ""
         attempt?.clear()
         attempt = null
-        mutableState.value = mutableState.value.copy(importMode = false, installer = InstallerState(availableVersion = release?.version), busy = false, error = null, message = null)
+        mutableState.value = mutableState.value.copy(importMode = false, sshOnlyCandidate = null, installer = InstallerState(availableVersion = release?.version), busy = false, error = null, message = null)
     }
 
     fun updateImportPanelPassword(value: String) = synchronized(lock) {
@@ -783,6 +859,140 @@ class ServerManager(
         mutableState.value = mutableState.value.copy(controlPanelId = null)
     }
 
+    internal suspend fun checkSshOnlyPanels() {
+        val servers = state.value.sshOnlyServers
+        for (server in servers) {
+            if (!canManage() || !isOnline()) return
+            val ssh = SshConnection(store)
+            val status = try {
+                connectSshOnly(server, ssh)
+                ssh.preflight().installationState
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { PanelInstallationState.UNKNOWN }
+            finally { ssh.close() }
+            val host = server.identity.host.let { if (':' in it) "[$it]" else it }
+            val location = sshLocationResolver.resolve("https://$host/")
+            synchronized(lock) {
+                if (mutableState.value.sshOnlyServers.any { it == server }) {
+                    val locations = mutableState.value.sshOnlyLocations
+                    mutableState.value = mutableState.value.copy(
+                        sshOnlyPanelStatus = mutableState.value.sshOnlyPanelStatus + (server.id to status),
+                        sshOnlyLocations = if (location != null) locations + (server.id to location) else locations,
+                    )
+                }
+            }
+            if (status == PanelInstallationState.PRESENT && !server.autoImportStarted && !state.value.busy) {
+                autoImportSshOnly(server)
+            }
+        }
+    }
+
+    private suspend fun autoImportSshOnly(server: SshOnlyServer) {
+        val claimed = try { withContext(Dispatchers.IO) { store.claimSshOnlyImport(server) } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { return }
+        synchronized(lock) {
+            mutableState.value = mutableState.value.copy(sshOnlyServers = mutableState.value.sshOnlyServers.map {
+                if (it == server) claimed else it
+            })
+        }
+        val ssh = SshConnection(store)
+        try {
+            val identity = connectSshOnly(claimed, ssh)
+            check(!state.value.busy && canManage() && isOnline()) { "Сессия занята или недоступна." }
+            val found = ThreeXPanelImporter(ssh).discover(claimed.credentials, identity, state.value.servers)
+            val existing = state.value.servers.firstOrNull { it.sharesInstallationWith(found) }
+            val panel = existing?.copy(token = found.token, credentials = claimed.credentials,
+                panelUsername = found.panelUsername.ifBlank { existing.panelUsername },
+                panelPassword = found.panelPassword.ifEmpty { existing.panelPassword })
+                ?: found.copy(panelId = existingPanelId(found.panelUrl) ?: found.panelId)
+            withContext(NonCancellable) {
+                val servers = withContext(Dispatchers.IO) {
+                    val current = store.load()
+                    val updated = current.filterNot { it.panelId == panel.panelId } + panel
+                    store.save(updated)
+                    updated
+                }
+                onInstalled(panel, claimed.name)
+                val remaining = withContext(Dispatchers.IO) { store.removeSshOnlyAfterPanelSaved(panel) }
+                synchronized(lock) {
+                    mutableState.value = mutableState.value.copy(servers = servers, sshOnlyServers = remaining,
+                        message = "Обнаруженная 3x-UI добавлена в приложение.")
+                }
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) {
+            synchronized(lock) {
+                if (mutableState.value.sshOnlyServers.any { it.id == claimed.id }) {
+                    mutableState.value = mutableState.value.copy(error = "Автоматический импорт 3x-UI не подтверждён. Проверьте панель и токены вручную; повторная попытка не запускается автоматически.")
+                }
+            }
+        } finally { ssh.close() }
+    }
+
+    internal suspend fun connectSshOnly(server: SshOnlyServer, ssh: SshConnection): SshHostIdentity {
+        check(canManage() && isOnline()) { "Для SSH необходимы активная сессия и сеть." }
+        val stored = withContext(Dispatchers.IO) { store.loadSshOnly().singleOrNull { it.id == server.id } }
+        requireSshOnlyIdentity(server, stored, server.identity)
+        val identity = ssh.connect(server.credentials)
+        requireSshOnlyIdentity(server, stored, identity)
+        check(canManage() && isOnline()) { "Сессия закрыта; команда не отправлена." }
+        val current = withContext(Dispatchers.IO) { store.loadSshOnly().singleOrNull { it.id == server.id } }
+        check(current == server) { "SSH-подключение изменилось; команда не отправлена." }
+        return identity
+    }
+
+    fun openSshOnlyConsole(id: String) = synchronized(lock) {
+        if (!canManage() || mutableState.value.busy || mutableState.value.sshOnlyServers.none { it.id == id }) return@synchronized
+        mutableState.value = mutableState.value.copy(sshOnlyConsoleId = id, consoleOutput = "", error = null)
+    }
+
+    fun closeSshOnlyConsole() = synchronized(lock) {
+        if (mutableState.value.sshOnlyConsoleId == null) return@synchronized
+        if (mutableState.value.busy) { interruptLocked(); disconnectLocked() }
+        consoleInput?.cancel(); consoleInput = null
+        consoleInterrupts?.cancel(); consoleInterrupts = null
+        mutableState.value = mutableState.value.copy(sshOnlyConsoleId = null, consoleActive = false, busy = false,
+            consoleOutput = "", error = null, message = "SSH закрыт. Отправленная команда могла продолжить выполнение.")
+    }
+
+    fun sendSshOnlyConsole(command: String): Boolean = synchronized(lock) {
+        if (!canManage() || !isValidConsoleCommand(command)) return@synchronized false
+        if (mutableState.value.consoleActive) return@synchronized consoleInput?.trySend(command + "\n")?.isSuccess == true
+        if (mutableState.value.busy || !isOnline()) return@synchronized false
+        val server = mutableState.value.sshOnlyServers.singleOrNull { it.id == mutableState.value.sshOnlyConsoleId } ?: return@synchronized false
+        startTask("SSH-сессия не подтверждена. Если команда отправлена, она может продолжать выполняться; автоматического повтора нет.") { ticket ->
+            val ssh = SshConnection(store)
+            val input = kotlinx.coroutines.channels.Channel<String>(CONSOLE_QUEUE_CAPACITY)
+            val interrupts = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+            try {
+                connectSshOnly(server, ssh)
+                val root = ssh.execute("id -u", timeoutMillis = 15_000, maxBytes = 1024)
+                check(root.exitCode == 0 && root.stdout.trim() == "0") { "Для консоли требуется root." }
+                val scrollback = ConsoleScrollback()
+                synchronized(lock) { requireTicket(ticket); consoleInput = input; consoleInterrupts = interrupts }
+                ssh.interactiveShell(input, interrupts, onStarted = {
+                    synchronized(lock) {
+                        requireTicket(ticket)
+                        check(input.trySend(command + "\n").isSuccess)
+                        mutableState.value = mutableState.value.copy(consoleActive = true)
+                    }
+                }) { chunk ->
+                    scrollback.append(chunk)
+                    publish(ticket) { it.copy(consoleOutput = scrollback.toString(), consoleOutputTruncated = scrollback.truncated) }
+                }
+            } finally {
+                input.cancel(); interrupts.cancel(); ssh.close()
+                synchronized(lock) {
+                    if (consoleInput === input) consoleInput = null
+                    if (consoleInterrupts === interrupts) consoleInterrupts = null
+                    if (ticket == generation) mutableState.value = mutableState.value.copy(consoleActive = false)
+                }
+            }
+        }
+        true
+    }
+
     fun openConsole() = synchronized(lock) {
         if (!canManage() || mutableState.value.busy || installing) return@synchronized
         val panelId = mutableState.value.controlPanelId ?: return@synchronized
@@ -1064,6 +1274,17 @@ class ServerManager(
         if (pending) check(sameIdentity(original, identity))
         if (BuildConfig.DEBUG) Log.d("XBoardSsh", "phase=authenticated")
         if (mutableState.value.importMode) {
+            val report = connection.preflight()
+            if (report.installationState == PanelInstallationState.ABSENT) {
+                prepareSshOnlyCandidate(ticket, credentials, identity, report)
+                return
+            }
+            if (report.installationState == PanelInstallationState.UNKNOWN) {
+                publish(ticket) { it.copy(message = null, installer = it.installer.copy(
+                    connected = true, hostIdentity = identity, preflight = report,
+                    error = "Не удалось подтвердить наличие или отсутствие 3x-UI. Проверьте права root и состояние сервера; данные не изменены.")) }
+                return
+            }
             publish(ticket) { it.copy(message = "Обнаружение адреса панели и API-токена…") }
             val discovered = ThreeXPanelImporter(connection).discover(credentials, identity, mutableState.value.servers,
                 mutableState.value.installer.importPanelPassword)
@@ -1191,6 +1412,9 @@ class ServerManager(
         publish(ticket) { it.copy(servers = servers) }
         checkCurrent(ticket)
         withContext(NonCancellable) { onInstalled(server, config.name) }
+        checkCurrent(ticket)
+        val remainingSshOnly = withContext(Dispatchers.IO) { store.removeSshOnlyAfterPanelSaved(server) }
+        publish(ticket) { it.copy(sshOnlyServers = remainingSshOnly) }
         checkCurrent(ticket)
         synchronized(lock) {
             requireTicket(ticket)

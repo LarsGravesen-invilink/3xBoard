@@ -47,6 +47,97 @@ class ServerStore(context: Context) {
         }
     }
 
+    fun loadSshOnly(): List<SshOnlyServer> = synchronized(LOCK) {
+        access { parseSshOnly(loadLocked()) }
+    }
+
+    fun upsertSshOnly(server: SshOnlyServer) = synchronized(LOCK) {
+        val current = loadSshOnly()
+        ensure(current.none { it.id != server.id && it.identity.host == server.identity.host && it.identity.port == server.identity.port },
+            "SSH-подключение к этому адресу уже сохранено.")
+        saveSshOnly(current.filterNot { it.id == server.id } + server)
+    }
+
+    fun claimSshOnlyImport(expected: SshOnlyServer): SshOnlyServer = synchronized(LOCK) {
+        val current = loadSshOnly()
+        ensure(current.any { it == expected } && !expected.autoImportStarted, "Импорт уже начат или запись изменена.")
+        val claimed = expected.copy(autoImportStarted = true)
+        saveSshOnly(current.map { if (it.id == expected.id) claimed else it })
+        claimed
+    }
+
+    fun removeSshOnlyAfterPanelSaved(server: InstalledServer): List<SshOnlyServer> = synchronized(LOCK) {
+        val saved = load().singleOrNull { it.panelId == server.panelId }
+        ensure(saved == server, "Сохранение панели не подтверждено; SSH-запись сохранена.")
+        val current = loadSshOnly()
+        val matches = current.filter { item ->
+            item.identity.host == server.sshHost && item.identity.port == server.sshPort &&
+                item.identity.algorithm == server.hostKeyAlgorithm && item.identity.keyBase64 == server.hostKeyBase64
+        }
+        ensure(matches.size <= 1, "Найдено несколько SSH-записей; автоматическое объединение отменено.")
+        val updated = current.filterNot { it in matches }
+        if (matches.isNotEmpty()) saveSshOnly(updated)
+        updated
+    }
+
+    fun removeSshOnly(expected: SshOnlyServer) = synchronized(LOCK) {
+        val current = loadSshOnly()
+        ensure(current.any { it == expected }, "Запись SSH изменилась или уже удалена.")
+        saveSshOnly(current.filterNot { it.id == expected.id })
+    }
+
+    fun saveSshOnly(servers: List<SshOnlyServer>) = synchronized(LOCK) {
+        access {
+            ensure(servers.size <= MAX_SERVERS, "Слишком много SSH-серверов.")
+            val current = loadLocked()
+            val pins = identities(current)
+            val ids = mutableSetOf<String>()
+            val rows = JSONArray()
+            servers.forEach { server ->
+                ServerValidation.text(server.id, 128, "Идентификатор сервера")
+                ServerValidation.text(server.name, 128, "Имя сервера")
+                ensure(server.id.isNotBlank() && ids.add(server.id) && current.servers.none { it.panelId == server.id }, "Повторяющийся идентификатор сервера.")
+                val credentials = server.credentials.validate()
+                val identity = validateIdentity(server.identity)
+                ensure(credentials.host == identity.host && credentials.port.toInt() == identity.port, "SSH-данные не соответствуют ключу сервера.")
+                ensure(pins[address(identity)] == identity, "Ключ SSH должен быть подтверждён до сохранения сервера.")
+                rows.put(JSONObject().put("id", server.id).put("name", server.name)
+                    .put("host", credentials.host).put("port", credentials.port).put("username", credentials.username)
+                    .put("authMethod", credentials.authMethod.name).put("password", credentials.password)
+                    .put("privateKey", credentials.privateKey).put("keyPassphrase", credentials.keyPassphrase)
+                    .put("algorithm", identity.algorithm).put("keyBase64", identity.keyBase64).put("fingerprint", identity.fingerprint)
+                    .put("autoImportStarted", server.autoImportStarted))
+            }
+            val updated = document(current, current.servers, current.pins).put("sshOnlyServers", rows)
+            writeLocked(updated, current.servers, current.pins)
+            ensure(parseSshOnly(loadLocked()) == servers, "Не удалось подтвердить сохранение SSH-серверов.")
+        }
+    }
+
+    private fun parseSshOnly(snapshot: Snapshot): List<SshOnlyServer> {
+        if (!snapshot.document.has("sshOnlyServers")) return emptyList()
+        val rows = snapshot.document.opt("sshOnlyServers") as? JSONArray ?: damaged()
+        ensure(rows.length() <= MAX_SERVERS, "Слишком много SSH-серверов.")
+        val pins = identities(snapshot)
+        val ids = mutableSetOf<String>()
+        return List(rows.length()) { index ->
+            val row = rows.optJSONObject(index) ?: damaged()
+            val id = string(row, "id")
+            val name = string(row, "name")
+            ServerValidation.text(id, 128, "Идентификатор сервера")
+            ServerValidation.text(name, 128, "Имя сервера")
+            ensure(id.isNotBlank() && ids.add(id) && snapshot.servers.none { it.panelId == id }, "Повторяющийся идентификатор сервера.")
+            val credentials = SshCredentials(host = string(row, "host"), port = string(row, "port"), username = string(row, "username"),
+                authMethod = authMethod(string(row, "authMethod")), password = string(row, "password"),
+                privateKey = string(row, "privateKey"), keyPassphrase = string(row, "keyPassphrase")).validate()
+            val identity = validateIdentity(SshHostIdentity(credentials.host, credentials.port.toInt(), string(row, "algorithm"),
+                string(row, "keyBase64"), string(row, "fingerprint")))
+            ensure(pins[address(identity)] == identity, "Сохранённый ключ SSH не совпадает с подтверждённым.")
+            ensure(!row.has("autoImportStarted") || row.opt("autoImportStarted") is Boolean, "Некорректный статус импорта.")
+            SshOnlyServer(id, name, credentials, identity, row.optBoolean("autoImportStarted", false))
+        }
+    }
+
     fun knownHost(host: String, port: Int): SshHostIdentity? = synchronized(LOCK) {
         access {
             ensure(port in 1..65535, "Порт SSH должен быть числом от 1 до 65535.")

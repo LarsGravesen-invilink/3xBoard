@@ -260,6 +260,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
     private var manualRefreshId = 0L
     private var manualInboundRefreshId = 0L
     private var monitorJob: Job? = null
+    private var sshOnlyProbeJob: Job? = null
     private var panelSaveJob: Job? = null
     private var detailJob: Job? = null
     private var clientSaveJob: Job? = null
@@ -690,6 +691,14 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                     serverState = serverState,
                     panels = state.panels.map { it.copy(sshManaged = it.id in managed) },
                 ) }
+                if (!serverState.busy && serverState.sshOnlySavedInstall != null && mutableState.value.stage == Stage.ADD_PANEL) {
+                    val install = serverState.sshOnlySavedInstall
+                    pageHistory.clear()
+                    panelFormMemory.clear()
+                    mutableState.update { it.copy(stage = if (install) Stage.INSTALLER else Stage.HOME, busy = false, panelError = null) }
+                    serverManager.acknowledgeSshOnlySaved()
+                    if (!install) startMonitoring()
+                }
                 if (!serverState.busy && serverState.installer.step == InstallStep.COMPLETE &&
                     serverState.installer.installed != null && mutableState.value.stage in setOf(Stage.INSTALLER, Stage.ADD_PANEL)) {
                     pageHistory.clear()
@@ -902,6 +911,13 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         serverManager.closeControls()
         closeClient()
         mutableState.update { it.copy(stage = destination, settingsMenuOpen = false, settingsError = null, settingsMessage = null) }
+    }
+
+    fun openSshOnlyInstaller(id: String) {
+        if (blockStealthOperation() || !foreground || !sessionActive() || mutableState.value.stage != Stage.HOME) return
+        if (!serverManager.beginSshOnlyInstall(id)) return
+        pageHistory.addLast(Stage.HOME)
+        mutableState.update { it.copy(stage = Stage.INSTALLER, settingsMenuOpen = false) }
     }
 
     fun openInstaller() {
@@ -2785,6 +2801,8 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         idleDeadline.clear()
         monitorJob?.cancel()
         monitorJob = null
+        sshOnlyProbeJob?.cancel()
+        sshOnlyProbeJob = null
         cascadeJournalJob?.cancel()
         cascadeJournalJob = null
         cascadeHealthJobs.forEach { it.cancel() }
@@ -2857,10 +2875,13 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
     fun onBackground() {
         if (foreground && sessionActive()) backgroundAt = SystemClock.elapsedRealtime()
         foreground = false
+        serverManager.closeSshOnlyConsole()
         serverManager.closeConsole()
         val stage = mutableState.value.stage
         monitorJob?.cancel()
         monitorJob = null
+        sshOnlyProbeJob?.cancel()
+        sshOnlyProbeJob = null
         visibleRefreshJob?.cancel()
         panelRefreshJob?.cancel()
         mutableState.update { it.copy(panelRefreshing = false) }
@@ -2883,6 +2904,12 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startMonitoring() {
         if (!foreground || !sessionActive() || mutableState.value.stealthMode || monitorJob?.isActive == true) return
+        sshOnlyProbeJob = viewModelScope.launch {
+            while (isActive && foreground && sessionActive() && !mutableState.value.stealthMode) {
+                if (connectivity.online.value) serverManager.checkSshOnlyPanels()
+                delay(60_000L)
+            }
+        }
         monitorJob = viewModelScope.launch {
             var tick = 0
             while (isActive) {

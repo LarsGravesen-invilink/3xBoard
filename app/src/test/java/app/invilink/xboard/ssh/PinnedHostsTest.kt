@@ -30,6 +30,15 @@ class PinnedHostsTest {
     )
 
     @Test
+    fun sshOnlyConsoleRejectsChangedIdentityAndDeletedRecord() {
+        val server = SshOnlyServer("id", "server", SshCredentials(host = host, password = "test"), identity())
+        requireSshOnlyIdentity(server, server, identity())
+        assertThrows(IllegalStateException::class.java) { requireSshOnlyIdentity(server, null, identity()) }
+        assertThrows(IllegalStateException::class.java) { requireSshOnlyIdentity(server, server, identity(ed25519Key(2))) }
+        assertThrows(IllegalStateException::class.java) { requireSshOnlyIdentity(server, server.copy(name = "changed"), identity()) }
+    }
+
+    @Test
     fun unknownHostIsRejectedWithFingerprintUntilExplicitlyPinned() {
         var pin: SshHostIdentity? = null
         val first = SshConnection.PinnedHosts({ h, p ->
