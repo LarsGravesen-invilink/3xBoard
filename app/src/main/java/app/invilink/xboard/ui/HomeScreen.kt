@@ -1123,12 +1123,13 @@ private fun PanelCard(
     loadPanelInbounds: suspend (String) -> List<app.invilink.xboard.panels.InboundDetail>?,
 ) {
     val palette = LocalXBoardPalette.current
+    val cardTitle = app.invilink.xboard.panels.panelDisplayName(panel.name, panel.displayAddress, panel.domainAddress)
     if (panel.sshOnly) {
         Column(modifier.clip(RoundedCornerShape(17.dp)).background(palette.soft)
             .border(1.dp, palette.line, RoundedCornerShape(17.dp))
             .clickable { onServerSettings(panel.id) }.padding(12.dp),
             verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(panel.name, style = MaterialTheme.typography.titleSmall, color = palette.foreground, textAlign = TextAlign.Center)
+            Text(cardTitle, style = MaterialTheme.typography.titleSmall, color = palette.foreground, textAlign = TextAlign.Center)
             if (!panel.displayAddress.isNullOrBlank() && panel.displayAddress != panel.name)
                 Text(panel.displayAddress, style = MaterialTheme.typography.bodySmall, color = palette.secondary, textAlign = TextAlign.Center)
             panel.location?.let { location ->
@@ -1222,7 +1223,7 @@ private fun PanelCard(
              Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                  Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                      Text(
-                         text = panel.name,
+                          text = cardTitle,
                          color = palette.foreground,
                          fontWeight = FontWeight.Bold,
                          fontSize = if (compact) 15.sp else 18.sp,
@@ -1230,9 +1231,14 @@ private fun PanelCard(
                          maxLines = 1,
                          overflow = TextOverflow.Ellipsis,
                      )
-                     Text(location, color = palette.secondary,
-                         fontSize = if (compact) 11.sp else 12.sp, lineHeight = if (compact) 14.sp else 16.sp,
-                         maxLines = 1, overflow = TextOverflow.Ellipsis)
+                      Text(location, color = palette.secondary,
+                          fontSize = if (compact) 11.sp else 12.sp, lineHeight = if (compact) 14.sp else 16.sp,
+                          maxLines = 1, overflow = TextOverflow.Ellipsis)
+                      panel.displayAddress?.takeIf { it.isNotBlank() && it != panel.name }?.let { address ->
+                          Text(address, color = palette.secondary,
+                              fontSize = if (compact) 11.sp else 12.sp, lineHeight = if (compact) 14.sp else 16.sp,
+                              maxLines = 1, overflow = TextOverflow.Ellipsis)
+                      }
                  }
                  if (panel.sshManaged) {
                      BoardIconButton(
@@ -1268,9 +1274,13 @@ private fun PanelCard(
                     color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                  MetricItem(MetricIcon.Cpu, formatCpu(metrics.cpuPercent), "CPU: ${formatCpu(metrics.cpuPercent)}", Modifier.weight(0.8f), 11.sp)
              }
-             Text("RAM ${formatTrafficBytes(metrics.memoryUsedBytes)} / ${formatTrafficBytes(metrics.memoryTotalBytes)}",
-                 color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp,
-                 modifier = Modifier.semantics { contentDescription = "Оперативная память: использовано ${formatTrafficBytes(metrics.memoryUsedBytes)}, всего ${formatTrafficBytes(metrics.memoryTotalBytes)}" })
+              Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
+              val freeMemoryPercent = metrics.memoryUsedBytes?.let { used -> metrics.memoryTotalBytes?.takeIf { it > 0 }?.let { total ->
+                  ((total - used).coerceAtLeast(0).toDouble() * 100.0 / total).coerceIn(0.0, 100.0)
+              } }
+              Text("ОЗУ: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "—"}",
+                  modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Свободная оперативная память: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "не определена"}" },
+                  textAlign = TextAlign.Center, color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp)
         }
     }
 }

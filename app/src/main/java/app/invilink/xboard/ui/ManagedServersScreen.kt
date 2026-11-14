@@ -1144,12 +1144,12 @@ internal fun RenameDialog(
 ) {
     var name by remember(serverName) { mutableStateOf(serverName) }
     val normalized = name.trim()
-    val valid = normalized.isNotEmpty() && normalized.length <= 128 &&
+    val valid = normalized.length <= 128 &&
         normalized.none { it.isISOControl() || it == '\u2028' || it == '\u2029' }
     ServerUiSecureDialog("Переименовать сервер", busy, onDismiss) {
         ServerUiField(
             name, { name = it }, "Название сервера", enabled = !busy, maxLength = 128,
-            hint = "1–128 символов; только название в 3xBoard.",
+            hint = "Пусто или IP — IP-адрес; DOMAIN — домен при наличии; другое — своё имя.",
         )
         error?.let { ServerUiNotice("Не удалось сохранить", it, warning = true) }
         ServerUiPrimaryButton("Сохранить", { onConfirm(normalized) }, enabled = valid && !busy, busy = busy)

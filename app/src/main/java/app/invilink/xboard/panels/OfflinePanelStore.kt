@@ -37,7 +37,7 @@ internal object OfflineSummaryJson {
         val location = summary.location
         row.put("location", if (location == null) JSONObject.NULL else JSONObject()
             .put("countryCode", location.countryCode).put("countryName", location.countryName)
-            .put("city", location.city ?: JSONObject.NULL))
+            .put("city", location.city ?: JSONObject.NULL).put("ipAddress", location.ipAddress ?: JSONObject.NULL))
         validate(row)
         return row
     }
@@ -76,7 +76,7 @@ internal object OfflineSummaryJson {
         val row = value as? JSONObject ?: invalid()
         val countryCode = optionalString(row, "countryCode") ?: return null
         val countryName = optionalString(row, "countryName") ?: return null
-        return PanelLocation(countryCode, countryName, optionalString(row, "city"))
+        return PanelLocation(countryCode, countryName, optionalString(row, "city"), optionalString(row, "ipAddress"))
     }
 
     private fun optionalString(row: JSONObject, key: String): String? {

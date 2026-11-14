@@ -1120,16 +1120,18 @@ class ServerManager(
         val panelId = mutableState.value.renamePanelId ?: return@synchronized
         val server = currentServer(panelId) ?: return@synchronized
         val normalized = name.trim()
+        val savedName = if (normalized.isEmpty()) "IP" else normalized
         try {
-            require(normalized.isNotEmpty())
-            ServerValidation.text(normalized, 128, "Название сервера")
+            if (!savedName.equals("IP", ignoreCase = true) && !savedName.equals("DOMAIN", ignoreCase = true)) {
+                ServerValidation.text(savedName, 128, "Название сервера")
+            } else require(savedName.length <= 128)
         } catch (_: Exception) {
-            reportError("Введите название от 1 до 128 символов без управляющих и скрытых символов.")
+            reportError("Название: до 128 символов без управляющих и скрытых символов. Пусто или IP — показывать IP; DOMAIN — показывать домен.")
             return@synchronized
         }
         startTask("Не удалось сохранить локальное название сервера. Данные SSH не изменены.") { ticket ->
             checkStored(ticket, server)
-            onRename(panelId, normalized)
+            onRename(panelId, savedName)
             checkCurrent(ticket)
             val servers = withContext(Dispatchers.IO) {
                 store.load().also { store.save(it) }

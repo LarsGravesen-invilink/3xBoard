@@ -101,7 +101,7 @@ class PanelLocationResolver {
                 ?.takeIf { it.isNotEmpty() && it.length <= 128 && it.none(Char::isISOControl) } ?: return null
             val city = (json.opt("city") as? String)?.trim()
                 ?.takeIf { it.isNotEmpty() && it.length <= 128 && it.none(Char::isISOControl) }
-            return PanelLocation(countryCode, countryName, city)
+            return PanelLocation(countryCode, countryName, city, ip)
         } finally {
             connection.disconnect()
         }

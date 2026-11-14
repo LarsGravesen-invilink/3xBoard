@@ -13,6 +13,25 @@ import org.junit.Test
 import java.net.URI
 
 class PanelApiTest {
+    @Test fun panelDisplayNameUsesIpAndDomainKeywordsPredictably() {
+        assertEquals("203.0.113.4", app.invilink.xboard.panels.panelDisplayName("", "203.0.113.4", "panel.example"))
+        assertEquals("203.0.113.4", app.invilink.xboard.panels.panelDisplayName("ip", "203.0.113.4", "panel.example"))
+        assertEquals("panel.example", app.invilink.xboard.panels.panelDisplayName("DOMAIN", "203.0.113.4", "panel.example"))
+        assertEquals("203.0.113.4", app.invilink.xboard.panels.panelDisplayName("domain", "203.0.113.4", null))
+        assertEquals("Мой сервер", app.invilink.xboard.panels.panelDisplayName("Мой сервер", "203.0.113.4", "panel.example"))
+    }
+    @Test fun clientTrafficUsesNumericStringsAndClientListOverridesStaleZero() {
+        val inbound = app.invilink.xboard.panels.ManagementParser.inbounds(org.json.JSONArray().put(org.json.JSONObject()
+            .put("id", 1).put("remark", "Inbound").put("protocol", "vless").put("port", 443).put("enable", true)
+            .put("settings", org.json.JSONObject().put("clients", org.json.JSONArray().put(org.json.JSONObject().put("email", "user"))))
+            .put("streamSettings", org.json.JSONObject()).put("clientStats", org.json.JSONArray().put(org.json.JSONObject()
+                .put("email", "user").put("up", 0).put("down", 0)))))
+        val merged = app.invilink.xboard.panels.ManagementParser.mergeClients(inbound, org.json.JSONArray().put(org.json.JSONObject()
+            .put("email", "user").put("inboundIds", org.json.JSONArray().put(1))
+            .put("traffic", org.json.JSONObject().put("up", "12").put("down", "34"))))
+        assertEquals(12L, merged.single().clients.single().up)
+        assertEquals(34L, merged.single().clients.single().down)
+    }
     @Test fun visibilityFiltersNamesAndSharedClients() {
         fun client(name: String) = app.invilink.xboard.panels.ClientDetail(name, true, 0, 0, null, null, "", null, "", "{}")
         fun inbound(id: Long, name: String, vararg clients: String) = app.invilink.xboard.panels.InboundDetail(

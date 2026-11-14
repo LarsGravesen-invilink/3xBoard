@@ -249,7 +249,11 @@ internal object ManagementParser {
         is String -> JSONObject(value)
         else -> JSONObject()
     }
-    private fun number(row: JSONObject, key: String): Long? = (row.opt(key) as? Number)?.toLong()
+    private fun number(row: JSONObject, key: String): Long? = when (val value = row.opt(key)) {
+        is Number -> value.toLong()
+        is String -> value.trim().toLongOrNull()
+        else -> null
+    }
 
     fun inbounds(value: Any?): List<InboundDetail> {
         val rows = value as? JSONArray ?: incompatible()
@@ -296,7 +300,17 @@ internal object ManagementParser {
                 val ids = row.optJSONArray("inboundIds") ?: JSONArray()
                 (0 until ids.length()).any { ids.optLong(it) == inbound.id }
             }.map { client(it, it.optJSONObject("traffic")) }
-            inbound.copy(clients = (inbound.clients + attached).associateBy { it.email }.values.toList())
+            val listed = inbound.clients.associateBy { it.email.lowercase(Locale.ROOT) }
+            inbound.copy(clients = attached.fold(listed) { merged, latest ->
+                val key = latest.email.lowercase(Locale.ROOT)
+                val previous = merged[key]
+                merged + (key to if (previous == null) latest else latest.copy(
+                    up = latest.up ?: previous.up, down = latest.down ?: previous.down,
+                    total = latest.total ?: previous.total, expiry = latest.expiry ?: previous.expiry,
+                    subId = latest.subId.ifBlank { previous.subId }, limitIp = latest.limitIp ?: previous.limitIp,
+                    comment = latest.comment.ifBlank { previous.comment }, raw = latest.raw,
+                ))
+            }.values.toList())
         }
     }
 

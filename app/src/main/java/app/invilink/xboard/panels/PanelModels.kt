@@ -36,9 +36,10 @@ data class PanelSummary(
     val webUiHidden: Boolean = false,
     val sshOnly: Boolean = false,
     val sshPanelStatus: String? = null,
+    val domainAddress: String? = null,
 )
 
-data class PanelLocation(val countryCode: String, val countryName: String, val city: String?) {
+data class PanelLocation(val countryCode: String, val countryName: String, val city: String?, val ipAddress: String? = null) {
     val countryFlag: String
         get() {
             val code = countryCode.uppercase(Locale.ROOT)
@@ -47,6 +48,12 @@ data class PanelLocation(val countryCode: String, val countryName: String, val c
                 code.forEach { appendCodePoint(0x1F1E6 + (it - 'A')) }
             }
         }
+}
+
+internal fun panelDisplayName(name: String, ipAddress: String?, domainAddress: String?): String = when (name.trim().uppercase(Locale.ROOT)) {
+    "", "IP" -> ipAddress ?: domainAddress ?: "Сервер"
+    "DOMAIN" -> domainAddress ?: ipAddress ?: "Сервер"
+    else -> name
 }
 
 internal object PanelValidation {

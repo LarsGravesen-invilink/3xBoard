@@ -370,7 +370,8 @@ class MainActivity : FragmentActivity() {
                              val panelAddress = model.administrationPanelConfig(panel.id)?.baseUrl?.let { url ->
                                  runCatching { java.net.URI(url).host }.getOrNull()
                              }
-                             panel.copy(displayAddress = sshAddress?.takeIf { it.isNotBlank() } ?: panelAddress,
+                              panel.copy(displayAddress = panel.location?.ipAddress ?: sshAddress?.takeIf { it.isNotBlank() } ?: panelAddress,
+                                  domainAddress = panelAddress?.takeIf { host -> !host.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) && ':' !in host },
                                  webUiHidden = panel.id in state.serverState.webUiHidden && panel.metrics.availability != app.invilink.xboard.panels.PanelAvailability.ONLINE)
                           } + if (state.stealthMode) emptyList() else state.serverState.sshOnlyServers.map { server ->
                               app.invilink.xboard.panels.PanelSummary(id = server.id, name = server.name.ifBlank { server.identity.host },
