@@ -1130,7 +1130,7 @@ private fun PanelCard(
             .clickable { onServerSettings(panel.id) }.padding(12.dp),
             verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
             Text(cardTitle, style = MaterialTheme.typography.titleSmall, color = palette.foreground, textAlign = TextAlign.Center)
-            if (!panel.displayAddress.isNullOrBlank() && panel.displayAddress != panel.name)
+            if (!panel.displayAddress.isNullOrBlank() && panel.displayAddress != cardTitle)
                 Text(panel.displayAddress, style = MaterialTheme.typography.bodySmall, color = palette.secondary, textAlign = TextAlign.Center)
             panel.location?.let { location ->
                 val country = java.util.Locale("", location.countryCode).getDisplayCountry(java.util.Locale("ru"))
@@ -1234,7 +1234,7 @@ private fun PanelCard(
                       Text(location, color = palette.secondary,
                           fontSize = if (compact) 11.sp else 12.sp, lineHeight = if (compact) 14.sp else 16.sp,
                           maxLines = 1, overflow = TextOverflow.Ellipsis)
-                      panel.displayAddress?.takeIf { it.isNotBlank() && it != panel.name }?.let { address ->
+                      panel.displayAddress?.takeIf { it.isNotBlank() && it != cardTitle }?.let { address ->
                           Text(address, color = palette.secondary,
                               fontSize = if (compact) 11.sp else 12.sp, lineHeight = if (compact) 14.sp else 16.sp,
                               maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1279,8 +1279,8 @@ private fun PanelCard(
                   ((total - used).coerceAtLeast(0).toDouble() * 100.0 / total).coerceIn(0.0, 100.0)
               } }
               Text("ОЗУ: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "—"}",
-                  modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Свободная оперативная память: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "не определена"}" },
-                  textAlign = TextAlign.Center, color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp)
+                  modifier = Modifier.semantics { contentDescription = "Свободная оперативная память: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "не определена"}" },
+                  color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp)
         }
     }
 }
