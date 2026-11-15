@@ -5,7 +5,7 @@
 <h1 align="center">3xBoard</h1>
 
 <p align="center">
-  Управление панелями 3x-ui и VPS/VDS серверами под управлением Linux для Android устройств.
+  Управление панелями 3x-ui на VPS/VDS серверах под управлением Linux для Android устройств.
 </p>
 
 ---
