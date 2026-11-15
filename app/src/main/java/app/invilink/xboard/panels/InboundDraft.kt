@@ -157,7 +157,7 @@ data class InboundDraft(
         val tls = stream.optJSONObject("tlsSettings") ?: JSONObject().also { stream.put("tlsSettings", it) }
         val certificates = tls.optJSONArray("certificates") ?: JSONArray().also { tls.put("certificates", it) }
         when {
-            key == "cert:add" -> certificates.put(JSONObject())
+            key == "cert:add" -> certificates.put(JSONObject().put("certificateFile", "").put("keyFile", ""))
             key.startsWith("cert:") -> {
                 val parts = key.split(':')
                 require(parts.size == 3) { "Неизвестное поле сертификата." }

@@ -2200,6 +2200,11 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                         "tls:serverName" -> draft.update(key, host)
                         "tls:certificateFile" -> draft.update(key, "/root/cert/$host/fullchain.pem")
                         "tls:keyFile" -> draft.update(key, "/root/cert/$host/privkey.pem")
+                        "hysteria:cert:0:certificateFile" -> draft.update(key, "/root/cert/$host/fullchain.pem")
+                        "hysteria:cert:0:keyFile" -> draft.update(key, "/root/cert/$host/privkey.pem")
+                        "tls:alpn" -> draft.update(key, "h3")
+                        "tls:minVersion" -> draft.update(key, "1.2")
+                        "tls:maxVersion" -> draft.update(key, "1.3")
                         else -> draft
                     }
                 }
