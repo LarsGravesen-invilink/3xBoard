@@ -221,7 +221,7 @@ internal fun InboundSettingsScreen(
                 field = "protocol",
                 label = "Протокол",
                 value = draft.protocol,
-                choices = InboundDraft.mainstreamProtocols + "amneziawg",
+                choices = InboundDraft.mainstreamProtocols + listOf("hysteria", "amneziawg"),
                 enabled = !saving && jsonPending.isEmpty() && draft.canChangeProtocol,
                 supporting = when {
                     draft.id != null -> "Протокол зафиксирован, чтобы сохранить клиентов."
@@ -241,7 +241,7 @@ internal fun InboundSettingsScreen(
                     else "TLS требует серверного сертификата; REALITY доступен только с совместимыми протоколом и транспортом.",
                     onField,
                 )
-            } else if (draft.protocol != "amneziawg") {
+            } else if (draft.protocol !in setOf("amneziawg", "hysteria")) {
                 Text("Параметры этого протокола доступны в расширенных настройках; создание через упрощённую форму не предлагается.", style = MaterialTheme.typography.bodySmall)
             }
             if (draft.protocol == "amneziawg") {
@@ -286,7 +286,9 @@ internal fun InboundSettingsScreen(
                 )
             }
             if (flowWarning != null) Text(flowWarning, color = palette.error)
-            if (draft.security in setOf("tls", "xtls", "reality")) {
+            if (draft.protocol == "hysteria") {
+                InboundHysteriaMandatoryFields(draft, saving, onField)
+            } else if (draft.security in setOf("tls", "xtls", "reality")) {
                 InboundSettingChoice(
                     "sniMode", "SNI", draft.sniMode,
                     listOf("preserve") + draft.sniChoices() + listOf("random", "custom"),
@@ -303,7 +305,7 @@ internal fun InboundSettingsScreen(
                 }
                 InboundSecurityFields(draft, saving, onField, optional = false)
             }
-            if (draft.protocol != "amneziawg") InboundSniffingFields(draft, saving || "sniffing" in jsonPending, onField)
+            if (draft.protocol != "amneziawg" && draft.protocol != "hysteria") InboundSniffingFields(draft, saving || "sniffing" in jsonPending, onField)
             HorizontalDivider(color = palette.line)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 BoardTextButton(onClick = { optional = !optional }, enabled = !saving && jsonPending.isEmpty(), modifier = Modifier.weight(1f)) {
@@ -341,7 +343,40 @@ internal fun InboundSettingsScreen(
                     "expiryTime", "Срок действия, Unix мс", draft.expiryTime, saving, onField,
                     "0 — бессрочно.", KeyboardType.Number,
                 )
+                InboundSettingChoice(
+                    "trafficReset", "Сброс трафика", draft.trafficReset, InboundDraft.trafficResetChoices, !saving,
+                    "Периодический сброс суммарного трафика inbound. По умолчанию отключён.", onField,
+                )
+                if (draft.trafficReset == "monthly") {
+                    InboundSettingField(
+                        "trafficResetDay", "День ежемесячного сброса", draft.trafficResetDay, saving, onField,
+                        "От 1 до 31.", KeyboardType.Number,
+                    )
+                }
                 InboundDraftField(draft, "tag", "Тег инбаунда", saving, onField, "Не меняется автоматически.", "generate:tag")
+                if (draft.protocol == "hysteria") {
+                    InboundSettingChoice(
+                        "tls:client:fingerprint", "uTLS", inboundFieldValue(draft, "tls:client:fingerprint"),
+                        InboundDraft.fingerprints, !saving, "Пусто — uTLS не задан.", onField,
+                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("QUIC Params", Modifier.weight(1f))
+                        Switch(
+                            checked = draft.hasHysteriaQuicParams(),
+                            onCheckedChange = { onField("hysteria:quic:enabled", it.toString()) },
+                            enabled = !saving,
+                        )
+                    }
+                    if (draft.hasHysteriaQuicParams()) {
+                        InboundJsonField(draft, "hysteria:quic:params", "QUIC Params (JSON)", draft.hysteriaQuicParams(), saving, onField, onJsonPending)
+                    }
+                    var hysteriaSniffing by rememberSaveable(draft.id, draft.protocol) { mutableStateOf(false) }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Sniffing", Modifier.weight(1f))
+                        Switch(checked = hysteriaSniffing, onCheckedChange = { hysteriaSniffing = it }, enabled = !saving)
+                    }
+                    if (hysteriaSniffing) InboundSniffingFields(draft, saving || "sniffing" in jsonPending, onField)
+                }
                 if (draft.security in setOf("tls", "xtls", "reality")) {
                     InboundSettingField(
                         "sniCandidates", "Домены-кандидаты SNI", draft.sniCandidates.joinToString("\n"), saving, onField,
@@ -449,6 +484,119 @@ private fun InboundTransportFields(draft: InboundDraft, saving: Boolean, onField
         )
         InboundJsonField(draft, "transport:extra", "XHTTP extra (JSON)", inboundFieldValue(draft, "transport:extra").ifBlank { "{}" }, saving, onField, onJsonPending)
     }
+}
+
+@Composable
+private fun InboundHysteriaMandatoryFields(draft: InboundDraft, saving: Boolean, onField: (String, String) -> Unit) {
+    Text("Hysteria2", style = MaterialTheme.typography.titleMedium)
+    InboundSettingField(
+        "tls:serverName", "SNI", inboundFieldValue(draft, "tls:serverName"), saving, onField,
+        "Имя сервера для TLS. По умолчанию будет подставлено адресом панели на следующем этапе.",
+    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        InboundSettingChoice(
+            "tls:minVersion", "Мин. TLS", inboundFieldValue(draft, "tls:minVersion"),
+            InboundDraft.tlsVersions, !saving, "", onField, modifier = Modifier.weight(1f),
+        )
+        InboundSettingChoice(
+            "tls:maxVersion", "Макс. TLS", inboundFieldValue(draft, "tls:maxVersion"),
+            InboundDraft.tlsVersions, !saving, "", onField, modifier = Modifier.weight(1f),
+        )
+    }
+    InboundSettingChoice(
+        "tls:alpn", "ALPN", inboundFieldValue(draft, "tls:alpn"),
+        listOf("h3", "h3, h2", "h3, http/1.1"), !saving,
+        "По умолчанию H3. Выбор сохраняется как список ALPN значений.", onField,
+    )
+    InboundHysteriaCertificates(draft, saving, onField)
+    val masqueradeType = draft.hysteriaMasqueradeType()
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Masquerade", Modifier.weight(1f))
+        Switch(
+            checked = masqueradeType != null,
+            onCheckedChange = { onField("hysteria:masquerade:enabled", it.toString()) },
+            enabled = !saving,
+        )
+    }
+    if (masqueradeType != null) {
+        InboundSettingChoice(
+            "hysteria:masquerade:type", "Тип Masquerade", masqueradeType,
+            InboundDraft.hysteriaMasqueradeTypes, !saving,
+            "Поля выбранного типа задаются в расширенных настройках JSON.", onField,
+        )
+    }
+    InboundHysteriaUdpMasks(draft, saving, onField)
+}
+
+@Composable
+private fun InboundHysteriaCertificates(draft: InboundDraft, saving: Boolean, onField: (String, String) -> Unit) {
+    Text("SSL-сертификаты", style = MaterialTheme.typography.titleSmall)
+    draft.hysteriaCertificates().forEachIndexed { index, certificate ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("SSL-сертификат ${index + 1}", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            if (index > 0) BoardIconButton(
+                onClick = { onField("hysteria:cert:$index:remove", "") }, enabled = !saving,
+                modifier = Modifier.size(40.dp),
+            ) { BoardIcon(BoardSymbol.Delete, LocalXBoardPalette.current.foreground, 18.dp) }
+        }
+        InboundSettingChoice("hysteria:cert:$index:mode", "Режим", certificate.mode, listOf("file", "content"), !saving,
+            "Путь к сертификатам или содержимое PEM.", onField)
+        if (certificate.mode == "file") {
+            InboundSettingField("hysteria:cert:$index:certificateFile", "Публичный ключ", certificate.certificateFile, saving, onField,
+                "Путь к fullchain.pem на сервере.")
+            InboundSettingField("hysteria:cert:$index:keyFile", "Приватный ключ", certificate.keyFile, saving, onField,
+                "Путь к privkey.pem на сервере.")
+            if (index == 0) BoardTextButton(onClick = { onField("hysteria:panelCertificates", "") }, enabled = !saving) { Text("Установить сертификаты панели") }
+        } else {
+            InboundSettingField("hysteria:cert:$index:certificate", "Содержимое сертификата (PEM)", certificate.certificate, saving, onField,
+                "Полный PEM certificate.", multiline = true)
+            InboundSettingField("hysteria:cert:$index:key", "Содержимое приватного ключа (PEM)", certificate.key, saving, onField,
+                "Полный PEM private key.", multiline = true)
+        }
+    }
+    BoardIconButton(onClick = { onField("hysteria:cert:add", "") }, enabled = !saving, modifier = Modifier.size(48.dp)) {
+        BoardIcon(BoardSymbol.Add, LocalXBoardPalette.current.foreground, 22.dp)
+    }
+}
+
+@Composable
+private fun InboundHysteriaUdpMasks(draft: InboundDraft, saving: Boolean, onField: (String, String) -> Unit) {
+    Text("UDP Mask", style = MaterialTheme.typography.titleSmall)
+    draft.hysteriaUdpMasks().forEachIndexed { index, mask ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("UDP Mask ${index + 1}", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            if (index > 0) {
+                BoardIconButton(
+                    onClick = { onField("hysteria:udp:remove:$index", "") },
+                    enabled = !saving,
+                    modifier = Modifier.size(40.dp).semantics { contentDescription = "Удалить UDP Mask ${index + 1}" },
+                ) { BoardIcon(BoardSymbol.Delete, LocalXBoardPalette.current.foreground, 18.dp) }
+            }
+        }
+        InboundSettingChoice(
+            "hysteria:udp:$index:type", "Тип", mask.type, InboundDraft.hysteriaUdpMaskTypes, !saving,
+            "Дополнительные параметры остальных типов доступны в расширенных настройках JSON.", onField,
+        )
+        if (mask.type == "salamander") {
+            InboundSettingChoice(
+                "hysteria:udp:$index:mode", "Режим", mask.mode,
+                listOf("salamander", "gecko"), !saving,
+                "Gecko сохраняется как settings.packetSize=1200, так как отдельного поля mode в API нет.", onField,
+            )
+            InboundSettingField(
+                "hysteria:udp:$index:password", "Password", mask.password, saving, onField,
+                "Очистка значения создаёт новый пароль.",
+            )
+            BoardTextButton(onClick = { onField("hysteria:udp:$index:regenerate", "") }, enabled = !saving) {
+                Text("Регенерировать пароль")
+            }
+        }
+    }
+    BoardIconButton(
+        onClick = { onField("hysteria:udp:add", "") },
+        enabled = !saving,
+        modifier = Modifier.size(48.dp).semantics { contentDescription = "Добавить UDP Mask" },
+    ) { BoardIcon(BoardSymbol.Add, LocalXBoardPalette.current.foreground, 22.dp) }
 }
 
 @Composable
@@ -633,9 +781,10 @@ private fun InboundSettingChoice(
     supporting: String,
     onField: (String, String) -> Unit,
     preservedSni: String = "",
+    modifier: Modifier = Modifier,
 ) {
     var expanded by remember(field, value) { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(label, style = MaterialTheme.typography.labelLarge)
         Box(Modifier.fillMaxWidth()) {
             BoardTextButton(

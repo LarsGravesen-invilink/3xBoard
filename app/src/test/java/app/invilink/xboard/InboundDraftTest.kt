@@ -38,6 +38,81 @@ class InboundDraftTest {
         assertEquals(9, JSONObject(draft.update("awg:jc", "9").payload().getString("settings")).getJSONObject("server").getInt("jc"))
         assertThrows(IllegalArgumentException::class.java) { draft.update("awg:jmin", "51").payload() }
     }
+    @Test fun hysteria2DefaultsUseUdpTlsAndSalamanderMask() {
+        val draft = InboundDraft.create().update("protocol", "hysteria")
+        val payload = draft.payload()
+        val settings = JSONObject(payload.getString("settings"))
+        val stream = JSONObject(payload.getString("streamSettings"))
+
+        assertEquals("hysteria", payload.getString("protocol"))
+        assertTrue(payload.getInt("port") in 10000..59999)
+        assertEquals(2, settings.getInt("version"))
+        assertEquals(0, settings.getJSONArray("clients").length())
+        assertEquals("hysteria", stream.getString("network"))
+        assertEquals("tls", stream.getString("security"))
+        assertEquals(2, stream.getJSONObject("hysteriaSettings").getInt("version"))
+        assertEquals(60, stream.getJSONObject("hysteriaSettings").getInt("udpIdleTimeout"))
+        assertEquals("h3", stream.getJSONObject("tlsSettings").getJSONArray("alpn").getString(0))
+        assertEquals("salamander", stream.getJSONObject("finalmask").getJSONArray("udp").getJSONObject(0).getString("type"))
+        assertTrue(stream.getJSONObject("finalmask").getJSONArray("udp").getJSONObject(0).getJSONObject("settings").getString("password").isNotBlank())
+    }
+
+    @Test fun hysteriaUdpMasksSupportAdditionalEntriesAndSalamanderModes() {
+        val draft = InboundDraft.create().update("protocol", "hysteria")
+            .update("hysteria:udp:0:mode", "gecko")
+            .update("hysteria:udp:add", "")
+            .update("hysteria:udp:1:password", "custom-secret")
+        val masks = draft.hysteriaUdpMasks()
+        val stream = JSONObject(draft.payload().getString("streamSettings"))
+
+        assertEquals(2, masks.size)
+        assertEquals("gecko", masks[0].mode)
+        assertEquals("custom-secret", masks[1].password)
+        assertEquals(1200, stream.getJSONObject("finalmask").getJSONArray("udp").getJSONObject(0).getJSONObject("settings").getInt("packetSize"))
+        assertEquals("custom-secret", stream.getJSONObject("finalmask").getJSONArray("udp").getJSONObject(1).getJSONObject("settings").getString("password"))
+    }
+
+    @Test fun hysteriaMasqueradeCanBeEnabledAndDisabledWithoutChangingMasks() {
+        val original = InboundDraft.create().update("protocol", "hysteria")
+        val enabled = original.update("hysteria:masquerade:enabled", "true")
+            .update("hysteria:masquerade:type", "proxy")
+        assertEquals("proxy", enabled.hysteriaMasqueradeType())
+        assertEquals(original.hysteriaUdpMasks().size, enabled.hysteriaUdpMasks().size)
+        assertEquals(null, enabled.update("hysteria:masquerade:enabled", "false").hysteriaMasqueradeType())
+    }
+
+    @Test fun hysteriaCertificatesSupportMultipleFileAndPemEntries() {
+        val pem = "-----BEGIN CERTIFICATE-----\nYWJjZGVmZ2hpamtsbW5vcA==\n-----END CERTIFICATE-----"
+        val key = "-----BEGIN PRIVATE KEY-----\nYWJjZGVmZ2hpamtsbW5vcA==\n-----END PRIVATE KEY-----"
+        val draft = InboundDraft.create().update("protocol", "hysteria")
+            .update("hysteria:cert:add", "")
+            .update("hysteria:cert:1:mode", "content")
+            .update("hysteria:cert:1:certificate", pem)
+            .update("hysteria:cert:1:key", key)
+        val certificates = draft.hysteriaCertificates()
+        val stream = JSONObject(draft.payload().getString("streamSettings"))
+
+        assertEquals(2, certificates.size)
+        assertEquals("file", certificates[0].mode)
+        assertEquals("content", certificates[1].mode)
+        assertEquals(pem, certificates[1].certificate)
+        assertEquals(2, stream.getJSONObject("tlsSettings").getJSONArray("certificates").length())
+    }
+
+    @Test fun trafficResetRoundTripsForEveryInboundProtocol() {
+        for (protocol in listOf("vless", "vmess", "trojan", "shadowsocks", "hysteria", "amneziawg")) {
+            var draft = InboundDraft.create().update("protocol", protocol)
+            if (protocol == "shadowsocks") draft = draft.update("generate:password", "")
+            draft = draft.update("trafficReset", "monthly").update("trafficResetDay", "15")
+            val payload = draft.payload()
+            assertEquals("monthly", payload.getString("trafficReset"))
+            assertEquals(15, payload.getInt("trafficResetDay"))
+            val restored = InboundDraft.fromRaw(payload.put("id", 1).toString())
+            assertEquals("monthly", restored.trafficReset)
+            assertEquals("15", restored.trafficResetDay)
+        }
+    }
+
     private fun reality(): InboundDraft = InboundDraft.create()
         .update("network", "xhttp")
         .update("security", "reality")

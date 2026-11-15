@@ -143,7 +143,8 @@ private fun InstructionTopicCard(topic: InstructionTopic, expanded: Boolean, onT
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                 HorizontalDivider(color = palette.line)
-                topic.blocks.forEach { (title, body) ->
+                if (topic.id == "protocols") ProtocolGuide()
+                else topic.blocks.forEach { (title, body) ->
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         ServerUiTitle(title)
                         Text(body, style = MaterialTheme.typography.bodyLarge, color = palette.foreground)
@@ -230,10 +231,11 @@ private data class InstructionTopic(
     val category: String,
     val title: String,
     val summary: String,
-    val blocks: List<Pair<String, String>>
+    val blocks: List<Pair<String, String>>,
+    val searchTerms: String = "",
 ) {
     val searchText = normalizeInstructionSearch(
-        listOf(category, title, summary).plus(blocks.flatMap { listOf(it.first, it.second) }).joinToString(" ")
+        listOf(category, title, summary, searchTerms).plus(blocks.flatMap { listOf(it.first, it.second) }).joinToString(" ")
     )
 }
 
@@ -242,10 +244,159 @@ private fun instructionTopic(
     category: String,
     title: String,
     summary: String,
-    vararg blocks: Pair<String, String>
-) = InstructionTopic(id, category, title, summary, blocks.toList())
+    vararg blocks: Pair<String, String>,
+    searchTerms: String = "",
+) = InstructionTopic(id, category, title, summary, blocks.toList(), searchTerms)
+
+private data class ProtocolGuideEntry(
+    val id: String,
+    val title: String,
+    val summary: String,
+    val suitableFor: String,
+    val dependencies: String,
+    val parameters: String,
+    val limitations: String,
+)
+
+@Composable
+private fun ProtocolGuide() {
+    var expanded by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    Text(
+        "Выберите протокол по типу сети и требуемой совместимости. Раскрывайте только нужный раздел: в нём указаны назначение, обязательные зависимости и параметры, которые должны совпадать у клиента и сервера.",
+        style = MaterialTheme.typography.bodyLarge,
+    )
+    ProtocolGuideNotice("Важно", "Маскировка затрудняет классификацию трафика, но не гарантирует обход ограничений. Открытый TCP/UDP-порт, firewall, версия Xray/клиента и параметры обеих сторон остаются обязательными условиями работы.")
+    protocolGuideEntries.forEach { entry ->
+        val open = entry.id in expanded
+        ServerUiCard {
+            BoardTextButton(
+                onClick = { expanded = if (open) expanded - entry.id else expanded + entry.id },
+                modifier = Modifier.fillMaxWidth().semantics { stateDescription = if (open) "Раздел раскрыт" else "Раздел свёрнут" },
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.textButtonColors(contentColor = LocalXBoardPalette.current.foreground),
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 6.dp),
+            ) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(entry.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+                    Text(entry.summary, style = MaterialTheme.typography.bodyMedium, color = LocalXBoardPalette.current.secondary)
+                    Text(if (open) "Свернуть параметры" else "Открыть параметры", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+            AnimatedVisibility(open, enter = expandVertically(tween(200)) + fadeIn(tween(160)), exit = shrinkVertically(tween(160)) + fadeOut(tween(120))) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HorizontalDivider(color = LocalXBoardPalette.current.line)
+                    ProtocolGuideSection("Для чего подходит", entry.suitableFor)
+                    ProtocolGuideSection("Зависимости", entry.dependencies)
+                    ProtocolGuideSection("Параметры и согласование", entry.parameters)
+                    ProtocolGuideSection("Ограничения и совместимость", entry.limitations)
+                }
+            }
+        }
+    }
+    ProtocolGuideGlossary()
+}
+
+@Composable
+private fun ProtocolGuideSection(title: String, body: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        ServerUiTitle(title)
+        Text(body, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun ProtocolGuideNotice(title: String, body: String) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        ServerUiTitle(title)
+        Text(body, style = MaterialTheme.typography.bodyMedium, color = LocalXBoardPalette.current.secondary)
+    }
+}
+
+@Composable
+private fun ProtocolGuideGlossary() {
+    var open by rememberSaveable { mutableStateOf(false) }
+    ServerUiCard {
+        BoardTextButton(onClick = { open = !open }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp),
+            colors = ButtonDefaults.textButtonColors(contentColor = LocalXBoardPalette.current.foreground), contentPadding = PaddingValues(0.dp)) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Общие термины", style = MaterialTheme.typography.titleMedium)
+                Text(if (open) "Свернуть" else "SNI, TLS, uTLS, ALPN, CDN, DPI, TCP/UDP и каскады", style = MaterialTheme.typography.bodyMedium, color = LocalXBoardPalette.current.secondary)
+            }
+        }
+        AnimatedVisibility(open, enter = expandVertically(tween(200)) + fadeIn(tween(160)), exit = shrinkVertically(tween(160)) + fadeOut(tween(120))) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                HorizontalDivider(color = LocalXBoardPalette.current.line)
+                protocolGlossary.forEach { (title, body) -> ProtocolGuideSection(title, body) }
+            }
+        }
+    }
+}
+
+private val protocolGuideEntries = listOf(
+    ProtocolGuideEntry(
+        "vless", "VLESS", "Гибкий современный протокол Xray с UUID-аутентификацией; защиту и транспорт выбирают отдельно.",
+        "Повседневный VPN, видео, мессенджеры, сети с ограничениями, CDN/reverse proxy и каскадные схемы.",
+        "Сам VLESS не даёт классического шифрования: для защищённого подключения нужен TLS или REALITY. Vision применяется только с совместимыми VLESS/TCP/RAW конфигурациями TLS/REALITY.",
+        "UUID — учётные данные клиента. TCP/RAW — минимальные накладные расходы; WS — совместимый CDN/reverse proxy; gRPC — HTTP/2; XHTTP — транспорт Xray; HTTPUpgrade похож на WS. Для TLS согласуйте сертификат, SNI, ALPN и при необходимости uTLS fingerprint. Для REALITY согласуйте target, serverNames, publicKey и shortId; приватный ключ остаётся на сервере.",
+        "Путь/Host транспорта должны совпасть с клиентом и proxy. Vision нельзя использовать с XHTTP. REALITY не делает соединение необнаружимым и зависит от версии Xray/клиента."
+    ),
+    ProtocolGuideEntry(
+        "amneziawg", "AmneziaWG", "Модифицированный WireGuard: полноценный UDP-туннель с обфускацией характерных признаков WireGuard.",
+        "Игры, мобильные сети, видео и другие сценарии с низкой задержкой; туннель для устройства или локальной сети.",
+        "Работает только поверх UDP. Нужны ключи WireGuard, peer-параметры и согласованные настройки маскировки. TLS, SNI, uTLS и ALPN для AmneziaWG не используются.",
+        "Клиенту и серверу нужны private/public key, allowed IPs, endpoint и при необходимости pre-shared key/keepalive. Jc/Jmin/Jmax задают junk packets и размеры; S1–S4, H1–H4 и I1–I5 меняют признаки пакетов. MTU и DNS влияют на работу туннеля.",
+        "При блокировке UDP соединение не работает. Неверные маскировочные параметры или allowed IPs не позволят установить peer-соединение. Нужна поддержка AmneziaWG на сервере и в клиенте."
+    ),
+    ProtocolGuideEntry(
+        "shadowsocks", "Shadowsocks", "Лёгкий зашифрованный прокси с общим паролем и выбранным шифром.",
+        "Повседневный прокси, сайты, видео, мессенджеры, нестабильные сети и отдельный узел каскада.",
+        "Клиент и сервер должны использовать одинаковые пароль и method. Для SS2022 ключ должен соответствовать выбранному алгоритму.",
+        "Современный выбор — AEAD: AES-128-GCM, AES-256-GCM или ChaCha20-Poly1305; в приложении доступны и варианты SS2022. TCP подходит для обычных соединений, UDP — для DNS, звонков и игр. SNI/uTLS появляются только у внешних плагинов, не у базового Shadowsocks.",
+        "Не является полноценным системным VPN без режима VPN в клиентском приложении. SIP003-плагины и их совместимость на стороне сервера/клиента настраиваются отдельно."
+    ),
+    ProtocolGuideEntry(
+        "vmess", "VMess", "Протокол семейства V2Ray с UUID-аутентификацией и широкой совместимостью со старой инфраструктурой.",
+        "Существующие VMess-конфигурации, универсальный прокси и подключение через разные транспорты.",
+        "Нужен UUID; время клиента и сервера должно быть синхронизировано. TLS — отдельный слой защиты и требует сертификат/SNI при его использовании.",
+        "Доступны TCP/RAW, WS, gRPC, HTTPUpgrade и XHTTP при поддержке ядром. Для TLS согласуйте SNI, ALPN и при необходимости uTLS fingerprint. Шифрование и транспорт должны поддерживаться конкретным клиентом.",
+        "VMess — более старый и сложный вариант, чем VLESS. Не все клиенты и версии Xray одинаково поддерживают новые транспорты."
+    ),
+    ProtocolGuideEntry(
+        "trojan", "Trojan", "TLS-ориентированный прокси с парольной аутентификацией, внешне похожий на обычное защищённое веб-соединение.",
+        "HTTPS-инфраструктура, reverse proxy/CDN при совместимой схеме и альтернативный прокси-узел.",
+        "Нужен действительный TLS-сертификат, доступный серверу, и пароль клиента. SNI обычно соответствует имени из сертификата.",
+        "TCP — базовый вариант; WS, gRPC и HTTPUpgrade возможны при поддержке схемой и ядром. TLS, SNI, ALPN и uTLS fingerprint должны быть согласованы с клиентом, сертификатом и reverse proxy.",
+        "Без действительного сертификата TLS-схема не будет корректной. CDN и reverse proxy поддерживают не все транспорты и требуют совпадения пути/Host/маршрутизации."
+    ),
+    ProtocolGuideEntry(
+        "hysteria2", "Hysteria2", "Высокопроизводительный прокси на QUIC/UDP, рассчитанный на сети с потерями пакетов и мобильные подключения.",
+        "Высокое разрешение видео, большие загрузки, мобильные и нестабильные сети, дополнительный узел VPN-инфраструктуры.",
+        "QUIC поверх UDP обязателен: нужен открытый UDP-порт. Нужны TLS-сертификат/ключ на сервере, auth клиента и совместимый Hysteria2-клиент. При Salamander общий пароль должен совпадать на обеих сторонах.",
+        "SNI выбирает TLS-сервер; ALPN по умолчанию h3; TLS в QUIC обеспечивает шифрование. UDP Mask Salamander использует password; Gecko — вариант с packetSize. Masquerade задаёт ответ для невалидных обращений. QUIC Params и uTLS доступны только при поддержке конкретной реализации.",
+        "Не использует TCP, WS или gRPC. При полной блокировке UDP не подключится. Маскировка не заменяет TLS и не гарантирует обход DPI."
+    ),
+)
+
+private val protocolGlossary = listOf(
+    "SNI" to "Имя сервера в TLS-рукопожатии: помогает выбрать виртуальный сервер и сертификат. Само по себе не шифрует трафик и может отличаться от IP подключения.",
+    "TLS" to "Криптографическая защита соединения: шифрование, целостность и аутентификация сервера. TLS не является отдельным VPN-протоколом.",
+    "uTLS / fingerprint" to "Имитация характеристик TLS-рукопожатия браузера. Не заменяет TLS и работает только там, где это поддерживают протокол и клиент.",
+    "ALPN" to "Согласование прикладного протокола внутри TLS: http/1.1, h2 (HTTP/2), h3 (HTTP/3). Значение должно соответствовать используемой схеме.",
+    "CDN и reverse proxy" to "Промежуточная веб-инфраструктура. Совместимость зависит от конкретного транспорта, домена, TLS, пути и Host; поддержка не универсальна.",
+    "DPI" to "Глубокий анализ характеристик трафика. Обфускация меняет признаки соединения, но не обещает невозможность обнаружения или блокировки.",
+    "TCP и UDP" to "TCP контролирует доставку и порядок данных. UDP передаёт датаграммы с меньшими накладными расходами, но без гарантии доставки; QUIC и AmneziaWG используют UDP.",
+    "Каскад" to "Маршрут клиент → входной сервер → выходной сервер → интернет. Межсерверный outbound должен быть совместим с inbound выхода; гибридные схемы требуют отдельной настройки обоих участков.",
+)
+
+private val protocolGuideSearchTerms = (protocolGuideEntries.joinToString(" ") { entry ->
+    listOf(entry.title, entry.summary, entry.suitableFor, entry.dependencies, entry.parameters, entry.limitations).joinToString(" ")
+} + " " + protocolGlossary.joinToString(" ") { it.first + " " + it.second })
 
 private val instructionTopics = listOf(
+    instructionTopic(
+        "protocols", "Протоколы", "Протоколы и их параметры", "Краткий выбор протокола, обязательные зависимости и параметры соединения.",
+        searchTerms = protocolGuideSearchTerms,
+    ),
     instructionTopic(
         "panel-add", "Инструкции", "Добавление панели по API-токену", "Подключение к уже работающей 3x-UI по HTTP или HTTPS.",
         "1. Выберите Token API" to "Нажмите + в шапке приложения и выберите значок Token API. Название панели можно указать вручную или оставить пустым.",
@@ -359,6 +510,6 @@ private val instructionTopics = listOf(
         "3. Удаление" to "«Удалить сервер из 3xBoard» убирает локальную запись, не останавливая 3x-UI на VPS.\nДля установки через 3xBoard доступно «Удалить и очистить VPS/VDS»: это необратимо удаляет 3x-UI и её базу данных без резервной копии. Для импортированных серверов доступно только локальное удаление.\nЭто не очистка всей ОС: другие службы и общие сертификаты сохраняются."
     )
 ).sortedBy { topic ->
-    listOf("install", "panel-add", "panel-add-ssh", "inbound-create", "amneziawg", "vless-xhttp", "client-create", "client-emoji", "cascade", "routing-rules", "check", "webui-protection", "panel-status", "metrics", "state", "navigation-home", "navigation-panel", "navigation-menu")
+    listOf("protocols", "install", "panel-add", "panel-add-ssh", "inbound-create", "amneziawg", "vless-xhttp", "client-create", "client-emoji", "cascade", "routing-rules", "check", "webui-protection", "panel-status", "metrics", "state", "navigation-home", "navigation-panel", "navigation-menu")
         .indexOf(topic.id).takeIf { it >= 0 } ?: Int.MAX_VALUE
 }

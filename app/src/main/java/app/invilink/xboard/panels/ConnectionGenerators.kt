@@ -44,6 +44,8 @@ object ConnectionGenerators {
 
     fun shortId(): String = hex(8)
 
+    fun hysteriaPassword(): String = urlBase64(bytes(24))
+
     fun tag(): String = "inbound-${hex(8)}"
 
     fun canGenerateClientValue(inbound: InboundDetail, field: String): Boolean =

@@ -7,6 +7,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CascadeServiceTest {
+    @Test fun cleanupAttemptsBothSidesWhenOneFails() = runBlocking {
+        for (failed in listOf(true, false)) {
+            val visited = mutableListOf<Boolean>()
+            val failures = cleanupCascadeSides { entry ->
+                visited.add(entry)
+                if (entry == failed) error("недоступен")
+            }
+            assertEquals(listOf(true, false), visited)
+            assertEquals(1, failures.size)
+            assertTrue(failures.single().contains(if (failed) "входной" else "выходной"))
+        }
+    }
+
+    @Test fun cleanupPropagatesCancellationWithoutAttemptingOtherSide() = runBlocking {
+        val visited = mutableListOf<Boolean>()
+        assertThrows(CancellationException::class.java) {
+            runBlocking { cleanupCascadeSides { visited.add(it); throw CancellationException() } }
+        }
+        assertEquals(listOf(true), visited)
+    }
     @Test fun createdInboundDeletionAllowsClientsAndRejectsIdentityConflicts() {
         val row = JSONObject().put("id", 7).put("tag", "cascade-entry").put("remark", "cascade")
             .put("settings", """{"clients":[{"email":"managed"},{"email":"added"}]}""")
@@ -421,16 +441,48 @@ class CascadeServiceTest {
         }
     }
 
-    @Test fun existingInboundsAreRejectedBeforeAnyChanges() = runBlocking {
+    @Test fun existingInboundsAreSnapshottedBeforeUpdatesAndRetainedForManualRecovery() = runBlocking {
         for ((entryId, exitId) in listOf(7L to null, null to 8L, 7L to 8L)) {
             val gateway = Gateway()
             val journal = Journal()
-            assertThrows(IllegalArgumentException::class.java) {
-                runBlocking { CascadeService(gateway, journal).create(request().copy(entryInboundId = entryId, exitInboundId = exitId)) }
+            val service = CascadeService(gateway, journal)
+            val result = service.create(request().copy(entryInboundId = entryId, exitInboundId = exitId))
+            val reserved = journal.history.first()
+            assertEquals(entryId == null, reserved.entryInboundCreated)
+            assertEquals(exitId == null, reserved.exitInboundCreated)
+            if (entryId != null) {
+                assertEquals(entryId, JSONObject(reserved.entryInboundSnapshot!!).getLong("id"))
+                assertEquals("hide entry", gateway.entry!!.name)
+                assertEquals("443", gateway.entry!!.port)
+                assertEquals(entryId, result.entryInboundId)
+                assertTrue(gateway.calls.indexOf("snapshot:entry") < gateway.calls.indexOf("update:entry"))
             }
-            assertTrue(gateway.calls.isEmpty())
-            assertTrue(journal.history.isEmpty())
+            if (exitId != null) {
+                assertEquals(exitId, JSONObject(reserved.exitInboundSnapshot!!).getLong("id"))
+                assertEquals("hide exit", gateway.exit!!.name)
+                assertEquals("8443", gateway.exit!!.port)
+                assertEquals(exitId, result.exitInboundId)
+                assertTrue(gateway.calls.indexOf("snapshot:exit") < gateway.calls.indexOf("update:exit"))
+            }
+            if (entryId != null) assertEquals(entryId, JSONObject(result.entryExpectedSnapshot!!).getLong("id"))
+            if (exitId != null) assertEquals(exitId, JSONObject(result.exitExpectedSnapshot!!).getLong("id"))
+            service.remove(result)
+            assertTrue(journal.removed)
+            assertTrue(gateway.calls.contains("cleanup"))
         }
+    }
+
+    @Test fun failedExpectedSnapshotKeepsInFlightJournal() = runBlocking {
+        val gateway = Gateway().apply { failAt = "capture:entry" }
+        val journal = Journal()
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { CascadeService(gateway, journal).create(request().copy(entryInboundId = 7)) }
+        }
+        assertTrue(journal.history.last().inFlight)
+        assertNotNull(journal.history.last().entryInboundSnapshot)
+        assertNull(journal.history.last().entryExpectedSnapshot)
+        assertFalse(journal.removed)
+        assertNull(gateway.cleanupMetadata)
     }
 
     @Test fun removalKeepsJournalOnFailureAndCanBeRetried() = runBlocking {
@@ -466,6 +518,21 @@ class CascadeServiceTest {
         assertThrows(IllegalStateException::class.java) { runBlocking { CascadeService(gateway, journal).remove(metadata) } }
         assertFalse(journal.removed)
         assertNull(gateway.cleanupMetadata)
+    }
+
+    @Test fun failedExistingUpdateRetainsInFlightSnapshot() = runBlocking {
+        val gateway = Gateway().apply { failAt = "update:entry" }
+        val journal = Journal()
+        val failure = assertThrows(IllegalStateException::class.java) {
+            runBlocking { CascadeService(gateway, journal).create(request().copy(entryInboundId = 7)) }
+        }
+        assertTrue(failure.message.orEmpty().contains("вручную"))
+        assertFalse(failure.message.orEmpty().contains("Повторите удаление"))
+        assertNotNull(journal.history.last().entryInboundSnapshot)
+        assertFalse(journal.history.last().entryInboundCreated)
+        assertTrue(journal.history.last().inFlight)
+        assertFalse(journal.removed)
+        assertFalse(gateway.calls.contains("cleanup"))
     }
 
     @Test fun completeFlowRecordsAllTransitionsAndResults() = runBlocking {

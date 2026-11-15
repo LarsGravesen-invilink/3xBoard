@@ -505,7 +505,7 @@ class PanelApi {
         var connectionFailure: Exception? = null
         val connections = try {
             ManagementParser.links(request(validated, "panel/api/clients/links/${encode(client.email)}", deadline, 5_000))
-                .map { normalizeClientConnectionLink(it, client.email) }.distinct()
+                .map { normalizeClientConnectionLink(it, client.visibleName) }.distinct()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {

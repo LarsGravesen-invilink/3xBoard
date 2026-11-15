@@ -10,6 +10,20 @@ import java.net.IDN
 import java.util.Base64
 import java.util.Locale
 
+data class HysteriaUdpMask(
+    val type: String,
+    val mode: String,
+    val password: String,
+)
+
+data class HysteriaCertificate(
+    val mode: String,
+    val certificateFile: String,
+    val keyFile: String,
+    val certificate: String,
+    val key: String,
+)
+
 data class InboundDraft(
     val id: Long? = null,
     val name: String = "",
@@ -20,6 +34,8 @@ data class InboundDraft(
     val security: String = "none",
     val quotaGiB: String = "0",
     val expiryTime: String = "0",
+    val trafficReset: String = "never",
+    val trafficResetDay: String = "1",
     val enabled: Boolean = true,
     val protocolSettings: String = "{\"clients\":[],\"decryption\":\"none\",\"fallbacks\":[]}",
     val streamSettings: String = "{\"network\":\"tcp\",\"security\":\"none\"}",
@@ -64,9 +80,19 @@ data class InboundDraft(
                     if (!settings.has(key)) settings.put(key, defaults.get(key))
                 }
                 copy(protocol = value, protocolSettings = settings.toString(2),
-                    port = if (value == "amneziawg" && port == "443") (10000 + java.security.SecureRandom().nextInt(50000)).toString() else port,
-                    security = if (value == "amneziawg") "none" else security,
-                    streamSettings = if (value == "amneziawg") JSONObject(streamSettings).put("security", "none").toString(2) else streamSettings,
+                    port = if (value in setOf("amneziawg", "hysteria") && port == "443") (10000 + java.security.SecureRandom().nextInt(50000)).toString() else port,
+                    network = if (value == "hysteria") "hysteria" else network,
+                    security = when (value) {
+                        "amneziawg" -> "none"
+                        "hysteria" -> "tls"
+                        else -> security
+                    },
+                    streamSettings = when (value) {
+                        "amneziawg" -> JSONObject(streamSettings).put("security", "none").toString(2)
+                        "hysteria" -> hysteriaStreamDefaults().toString(2)
+                        else -> streamSettings
+                    },
+                    sniMode = if (value == "hysteria") "preserve" else sniMode,
                     name = if (value == "amneziawg") normalizeClientName(name) else name)
             }
         }
@@ -79,6 +105,8 @@ data class InboundDraft(
         }
         "quotaGiB" -> copy(quotaGiB = value)
         "expiryTime" -> copy(expiryTime = value)
+        "trafficReset" -> copy(trafficReset = value)
+        "trafficResetDay" -> copy(trafficResetDay = value)
         "protocolSettings" -> copy(protocolSettings = value)
         "streamSettings" -> copy(streamSettings = value, fieldInputs = fieldInputs.filterKeys { it.startsWith("sniffing:") }, sniMode = "preserve")
         "sniffing" -> copy(sniffing = value, fieldInputs = fieldInputs.filterKeys { !it.startsWith("sniffing:") })
@@ -95,7 +123,8 @@ data class InboundDraft(
         "generate:shortId" -> generate("shortId")
         "generate:password" -> generate("password")
         "generate:tag" -> generate("tag")
-        else -> if (field.startsWith("awg:")) updateAwgField(field.substringAfter(':'), value)
+        else -> if (field.startsWith("hysteria:")) updateHysteriaField(field.substringAfter(':'), value)
+            else if (field.startsWith("awg:")) updateAwgField(field.substringAfter(':'), value)
             else updateOtherField(field, value)
     }
 
@@ -117,6 +146,136 @@ data class InboundDraft(
             else if (field in streamFields || field in certificateFields) updateStreamField(field, value)
             else throw IllegalArgumentException("Неизвестное поле инбаунда: $field")
     }
+
+    private fun updateHysteriaField(key: String, value: String): InboundDraft {
+        require(protocol == "hysteria") { "Поля Hysteria2 доступны только для Hysteria2." }
+        val stream = jsonObject(streamSettings, "Настройки транспорта")
+        val finalMask = stream.optJSONObject("finalmask") ?: JSONObject().also { stream.put("finalmask", it) }
+        val udp = finalMask.optJSONArray("udp") ?: JSONArray().also { finalMask.put("udp", it) }
+        fun defaultMask(): JSONObject = JSONObject().put("type", "salamander")
+            .put("settings", JSONObject().put("password", ConnectionGenerators.hysteriaPassword()))
+        val tls = stream.optJSONObject("tlsSettings") ?: JSONObject().also { stream.put("tlsSettings", it) }
+        val certificates = tls.optJSONArray("certificates") ?: JSONArray().also { tls.put("certificates", it) }
+        when {
+            key == "cert:add" -> certificates.put(JSONObject())
+            key.startsWith("cert:") -> {
+                val parts = key.split(':')
+                require(parts.size == 3) { "Неизвестное поле сертификата." }
+                val index = parts[1].toIntOrNull()
+                require(index != null && index in 0 until certificates.length()) { "Неизвестный сертификат." }
+                val certificate = certificates.optJSONObject(index) ?: throw IllegalArgumentException("Сертификат должен быть объектом.")
+                when (parts[2]) {
+                    "remove" -> { require(certificates.length() > 1) { "Должен остаться хотя бы один сертификат." }; certificates.remove(index) }
+                    "mode" -> when (value) {
+                        "file" -> { certificate.remove("certificate"); certificate.remove("key") }
+                        "content" -> { certificate.remove("certificateFile"); certificate.remove("keyFile") }
+                        else -> throw IllegalArgumentException("Неизвестный режим сертификата.")
+                    }
+                    "certificateFile", "keyFile" -> certificate.put(parts[2], value)
+                    "certificate", "key" -> certificate.put(parts[2], JSONArray(value.lines()))
+                    else -> throw IllegalArgumentException("Неизвестное поле сертификата.")
+                }
+            }
+            key == "quic:enabled" -> {
+                require(value == "true" || value == "false") { "QUIC Params должен быть true или false." }
+                if (value == "true") finalMask.put("quicParams", JSONObject()) else finalMask.remove("quicParams")
+            }
+            key == "quic:params" -> {
+                if (value.isBlank()) finalMask.remove("quicParams") else finalMask.put("quicParams", jsonObject(value, "QUIC Params"))
+            }
+            key == "masquerade:enabled" -> {
+                require(value == "true" || value == "false") { "Masquerade должен быть true или false." }
+                val hysteria = stream.optJSONObject("hysteriaSettings") ?: JSONObject().also { stream.put("hysteriaSettings", it) }
+                if (value == "true") hysteria.put("masquerade", JSONObject().put("type", "string").put("string", ""))
+                else hysteria.remove("masquerade")
+            }
+            key == "masquerade:type" -> {
+                require(value in hysteriaMasqueradeTypes) { "Неизвестный тип Masquerade." }
+                val hysteria = stream.optJSONObject("hysteriaSettings") ?: JSONObject().also { stream.put("hysteriaSettings", it) }
+                val masquerade = hysteria.optJSONObject("masquerade") ?: JSONObject().also { hysteria.put("masquerade", it) }
+                masquerade.put("type", value)
+            }
+            key == "udp:add" -> udp.put(defaultMask())
+            key.startsWith("udp:remove:") -> {
+                val index = key.substringAfterLast(':').toIntOrNull()
+                require(index != null && index in 0 until udp.length()) { "Неизвестная UDP Mask." }
+                require(udp.length() > 1) { "Должна остаться хотя бы одна UDP Mask." }
+                udp.remove(index)
+            }
+            key.startsWith("udp:") -> {
+                val parts = key.split(':')
+                require(parts.size == 3) { "Неизвестное поле UDP Mask." }
+                val index = parts[1].toIntOrNull()
+                require(index != null && index in 0 until udp.length()) { "Неизвестная UDP Mask." }
+                val mask = udp.optJSONObject(index) ?: throw IllegalArgumentException("UDP Mask должна быть объектом.")
+                val settings = mask.optJSONObject("settings") ?: JSONObject().also { mask.put("settings", it) }
+                when (parts[2]) {
+                    "type" -> {
+                        require(value in hysteriaUdpMaskTypes) { "Неизвестный тип UDP Mask." }
+                        mask.put("type", value)
+                        if (value != "salamander") settings.remove("password")
+                    }
+                    "mode" -> when (value) {
+                        "salamander" -> settings.remove("packetSize")
+                        "gecko" -> settings.put("packetSize", 1200)
+                        else -> throw IllegalArgumentException("Неизвестный режим Salamander.")
+                    }
+                    "password" -> settings.put("password", value.ifBlank { ConnectionGenerators.hysteriaPassword() })
+                    "regenerate" -> settings.put("password", ConnectionGenerators.hysteriaPassword())
+                    else -> throw IllegalArgumentException("Неизвестное поле UDP Mask.")
+                }
+            }
+            else -> throw IllegalArgumentException("Неизвестное поле Hysteria2.")
+        }
+        return copy(streamSettings = stream.toString(2))
+    }
+
+    fun hysteriaCertificates(): List<HysteriaCertificate> {
+        if (protocol != "hysteria") return emptyList()
+        return runCatching {
+            val entries = jsonObject(streamSettings, "Настройки транспорта").optJSONObject("tlsSettings")?.optJSONArray("certificates") ?: JSONArray()
+            (0 until entries.length()).mapNotNull { index -> entries.optJSONObject(index)?.let { certificate ->
+                fun pem(key: String): String = certificate.optJSONArray(key)?.let { lines ->
+                    (0 until lines.length()).joinToString("\n") { lines.optString(it) }
+                }.orEmpty()
+                HysteriaCertificate(
+                    mode = if (certificate.has("certificateFile") || certificate.has("keyFile")) "file" else "content",
+                    certificateFile = certificate.optString("certificateFile"), keyFile = certificate.optString("keyFile"),
+                    certificate = pem("certificate"), key = pem("key"),
+                )
+            } }
+        }.getOrDefault(emptyList())
+    }
+
+    fun hysteriaUdpMasks(): List<HysteriaUdpMask> {
+        if (protocol != "hysteria") return emptyList()
+        return runCatching {
+            val udp = jsonObject(streamSettings, "Настройки транспорта").optJSONObject("finalmask")?.optJSONArray("udp")
+                ?: JSONArray()
+            (0 until udp.length()).mapNotNull { index ->
+                val mask = udp.optJSONObject(index) ?: return@mapNotNull null
+                val settings = mask.optJSONObject("settings")
+                HysteriaUdpMask(
+                    type = mask.optString("type", "salamander"),
+                    mode = if (settings?.has("packetSize") == true) "gecko" else "salamander",
+                    password = settings?.optString("password").orEmpty(),
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun hysteriaMasqueradeType(): String? = if (protocol != "hysteria") null else runCatching {
+        jsonObject(streamSettings, "Настройки транспорта").optJSONObject("hysteriaSettings")?.optJSONObject("masquerade")
+            ?.optString("type")?.takeIf { it in hysteriaMasqueradeTypes }
+    }.getOrNull()
+
+    fun hysteriaQuicParams(): String = if (protocol != "hysteria") "{}" else runCatching {
+        jsonObject(streamSettings, "Настройки транспорта").optJSONObject("finalmask")?.optJSONObject("quicParams")?.toString(2) ?: "{}"
+    }.getOrDefault("{}")
+
+    fun hasHysteriaQuicParams(): Boolean = if (protocol != "hysteria") false else runCatching {
+        jsonObject(streamSettings, "Настройки транспорта").optJSONObject("finalmask")?.has("quicParams") == true
+    }.getOrDefault(false)
 
     private fun updateAwgField(key: String, value: String): InboundDraft {
         require(protocol == "amneziawg")
@@ -142,11 +301,17 @@ data class InboundDraft(
         runCatching { normalizeSni(candidate.trim()) }.getOrNull()
     }.distinct()
 
-    fun networkChoices(): List<String> = if (protocol in mainstreamProtocols) {
-        listOf("tcp", "raw", "ws", "grpc", "httpupgrade", "xhttp")
-    } else emptyList()
+    fun networkChoices(): List<String> = when {
+        protocol in mainstreamProtocols -> listOf("tcp", "raw", "ws", "grpc", "httpupgrade", "xhttp")
+        protocol == "hysteria" -> listOf("hysteria")
+        else -> emptyList()
+    }
 
     fun securityChoices(): List<String> = buildList {
+        if (protocol == "hysteria") {
+            add("tls")
+            return@buildList
+        }
         add("none")
         if (protocol in mainstreamProtocols && network in setOf("tcp", "raw", "ws", "grpc", "httpupgrade", "xhttp", "http", "h2", "splithttp")) {
             add("tls")
@@ -193,7 +358,7 @@ data class InboundDraft(
     }
 
     fun validateAdvancedJson(field: String, text: String) {
-        require(field in setOf("protocolSettings", "streamSettings", "sniffing", "allocate", "extra", "transport:extra", "sockopt")) {
+        require(field in setOf("protocolSettings", "streamSettings", "sniffing", "allocate", "extra", "transport:extra", "sockopt", "hysteria:quic:params")) {
             "Неизвестное поле JSON."
         }
         val value = jsonObject(text, field)
@@ -433,6 +598,9 @@ data class InboundDraft(
         val expiryText = expiryTime.trim()
         val expiry = expiryText.takeIf { it.matches(Regex("[0-9]+")) }?.toLongOrNull()
         require(expiry != null) { "Срок должен быть неотрицательным целым числом Unix-миллисекунд; 0 — бессрочно." }
+        require(trafficReset in trafficResetChoices) { "Неизвестный период сброса трафика." }
+        val resetDay = trafficResetDay.trim().toIntOrNull()
+        require(resetDay != null && resetDay in 1..31) { "День ежемесячного сброса трафика: от 1 до 31." }
         require(id == null || id > 0) { "Некорректный ID инбаунда." }
         val result = jsonObject(original, "Исходный инбаунд")
         if (id != null && result.has("protocol")) {
@@ -464,6 +632,8 @@ data class InboundDraft(
         result.put("enable", enabled)
         result.put("total", bytes)
         result.put("expiryTime", expiry)
+        result.put("trafficReset", trafficReset)
+        result.put("trafficResetDay", resetDay)
         result.put("settings", settings.toString())
         result.put("streamSettings", stream.toString())
         result.put("sniffing", sniff.toString())
@@ -659,7 +829,12 @@ data class InboundDraft(
         }
 
         val mainstreamProtocols: List<String> = listOf("vless", "vmess", "trojan", "shadowsocks")
-        val protocols: List<String> = mainstreamProtocols + listOf("amneziawg", "dokodemo-door", "mixed")
+        val hysteriaUdpMaskTypes: List<String> = listOf(
+            "salamander", "mkcp-legacy", "header-custom", "xdns", "xicmp", "noise", "sudoku", "realm", "udphop", "filter",
+        )
+        val hysteriaMasqueradeTypes: List<String> = listOf("proxy", "file", "string")
+        val trafficResetChoices: List<String> = listOf("never", "hourly", "daily", "weekly", "monthly")
+        val protocols: List<String> = mainstreamProtocols + listOf("hysteria", "amneziawg", "dokodemo-door", "mixed")
         val defaultSniCandidates: List<String> = listOf(
             "www.microsoft.com", "www.apple.com", "www.cloudflare.com", "www.amazon.com", "www.google.com",
             "www.bing.com", "www.wikipedia.org", "www.github.com", "www.mozilla.org", "www.samsung.com",
@@ -689,7 +864,7 @@ data class InboundDraft(
         val securities: List<String> = listOf("none", "tls", "reality")
         private val knownProtocols = protocols + listOf("http", "socks", "tunnel", "tun", "wireguard", "amneziawg", "hysteria", "hysteria2", "tuic", "mtproto", "masque")
         private val bytesPerGiB = BigDecimal(1073741824L)
-        private val formKeys = setOf("id", "remark", "listen", "port", "protocol", "enable", "total", "expiryTime", "settings", "streamSettings", "sniffing", "allocate")
+        private val formKeys = setOf("id", "remark", "listen", "port", "protocol", "enable", "total", "expiryTime", "trafficReset", "trafficResetDay", "settings", "streamSettings", "sniffing", "allocate")
 
         fun create(): InboundDraft = InboundDraft()
 
@@ -718,6 +893,8 @@ data class InboundDraft(
                 security = stream.optString("security", "none"),
                 quotaGiB = BigDecimal(total).divide(bytesPerGiB).stripTrailingZeros().toPlainString(),
                 expiryTime = root.opt("expiryTime")?.toString() ?: "0",
+                trafficReset = root.optString("trafficReset").takeIf { it in trafficResetChoices } ?: "never",
+                trafficResetDay = root.opt("trafficResetDay")?.toString()?.toIntOrNull()?.takeIf { it in 1..31 }?.toString() ?: "1",
                 enabled = root.optBoolean("enable", true),
                 protocolSettings = settings.toString(2),
                 streamSettings = stream.toString(2),
@@ -743,7 +920,26 @@ data class InboundDraft(
             }
         }
 
+        private fun hysteriaStreamDefaults(): JSONObject = JSONObject("""
+            {
+              "network":"hysteria",
+              "security":"tls",
+              "hysteriaSettings":{"version":2,"udpIdleTimeout":60},
+              "tlsSettings":{
+                "minVersion":"1.2",
+                "maxVersion":"1.3",
+                "alpn":["h3"],
+                "certificates":[{
+                  "certificateFile":"/root/cert/ip/fullchain.pem",
+                  "keyFile":"/root/cert/ip/privkey.pem"
+                }]
+              },
+              "finalmask":{"udp":[{"type":"salamander","settings":{"password":"${ConnectionGenerators.hysteriaPassword()}"}}]}
+            }
+        """.trimIndent())
+
         private fun defaults(protocol: String): JSONObject = JSONObject(when (protocol) {
+            "hysteria" -> "{\"version\":2,\"clients\":[]}"
             "amneziawg" -> "{\"server\":{\"subnetIp\":\"10.8.1.0\",\"subnetCidr\":24,\"mtu\":1280,\"primaryDns\":\"8.8.8.8\",\"secondaryDns\":\"1.1.1.1\",\"jc\":5,\"jmin\":10,\"jmax\":50,\"s1\":30,\"s2\":45,\"s3\":10,\"s4\":5,\"h1\":\"1\",\"h2\":\"2\",\"h3\":\"3\",\"h4\":\"4\",\"i1\":\"\"},\"clients\":[]}"
             "vless" -> "{\"clients\":[],\"decryption\":\"none\",\"fallbacks\":[]}"
             "vmess" -> "{\"clients\":[]}"

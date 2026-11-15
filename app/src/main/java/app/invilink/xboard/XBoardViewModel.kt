@@ -2185,7 +2185,26 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         if (editor != null && key !in (if (editor.isExit) setOf("port", "network", "sniMode", "sniCustom", "reality:serverNames", "reality:shortIds", "transport:path", "transport:mode") else setOf("port", "network", "sniMode", "sniCustom", "reality:serverNames", "transport:path", "transport:mode"))) return
         if (editor != null && key == "network" && value !in setOf("tcp", "xhttp")) return
         try {
-            mutableState.update { it.copy(inboundDraft = it.inboundDraft.update(key, value), inboundSaveError = null) }
+            mutableState.update { state ->
+                var draft = if (key == "hysteria:panelCertificates") state.inboundDraft else state.inboundDraft.update(key, value)
+                val host = panelConfigs.firstOrNull { it.id == state.activePanelId }?.baseUrl?.let { baseUrl ->
+                    runCatching { URI(baseUrl).host?.removeSurrounding("[", "]") }.getOrNull()
+                }.orEmpty()
+                if ((key == "protocol" && value == "hysteria") || key == "hysteria:panelCertificates") {
+                    require(draft.protocol == "hysteria") { "Сертификаты панели доступны только для Hysteria2." }
+                    if (host.isNotBlank()) draft = draft.update("tls:serverName", host)
+                        .update("tls:certificateFile", "/root/cert/$host/fullchain.pem")
+                        .update("tls:keyFile", "/root/cert/$host/privkey.pem")
+                } else if (draft.protocol == "hysteria" && value.isBlank() && host.isNotBlank()) {
+                    draft = when (key) {
+                        "tls:serverName" -> draft.update(key, host)
+                        "tls:certificateFile" -> draft.update(key, "/root/cert/$host/fullchain.pem")
+                        "tls:keyFile" -> draft.update(key, "/root/cert/$host/privkey.pem")
+                        else -> draft
+                    }
+                }
+                state.copy(inboundDraft = draft, inboundSaveError = null)
+            }
         } catch (failure: IllegalArgumentException) {
             mutableState.update { it.copy(inboundSaveError = failure.message) }
         }
