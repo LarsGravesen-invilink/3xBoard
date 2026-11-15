@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/drawable-nodpi/xboard_icon.png" alt="Логотип 3xBoard" width="140">
+  <img src="app/src/main/res/drawable-nodpi/xboard_icon.png" alt="Логотип 3xBoard" width="180">
 </p>
 
 <h1 align="center">3xBoard</h1>
