@@ -51,6 +51,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.invilink.xboard.XBoardViewModel
 import app.invilink.xboard.CascadeInboundSelection
 import app.invilink.xboard.panels.CascadeTransport
+import app.invilink.xboard.panels.CascadeProtocol
 import app.invilink.xboard.panels.cascadeFlag
 import app.invilink.xboard.panels.InboundDraft
 import androidx.compose.runtime.getValue
@@ -67,6 +68,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontStyle
@@ -159,14 +161,15 @@ private fun ManagedServerCard(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 ServerUiBadge("SSH")
                 Text(
-                    summary?.name?.takeIf { it.isNotBlank() } ?: panelHost ?: "Сервер 3x-UI",
+                    summary?.let { app.invilink.xboard.panels.panelDisplayName(it.name, it.location?.ipAddress ?: panelHost, panelHost) }
+                        ?: panelHost ?: "Сервер 3x-UI",
                     style = MaterialTheme.typography.titleLarge, color = palette.foreground,
                 )
             }
             BoardIconButton(
                 onClick = { onEdit(server.panelId) },
                 modifier = Modifier.size(52.dp).semantics {
-                    contentDescription = "Администрирование ${summary?.name ?: panelHost ?: server.sshHost}"
+                    contentDescription = "Администрирование ${summary?.let { app.invilink.xboard.panels.panelDisplayName(it.name, it.location?.ipAddress ?: panelHost, panelHost) } ?: panelHost ?: server.sshHost}"
                 },
             ) { BoardIcon(BoardSymbol.Edit, palette.foreground, 24.dp) }
         }
@@ -851,9 +854,18 @@ internal fun CascadeWizardScreen(
     val entryValid = panels.any { it.id == form.entry }
     val exitValid = panels.any { it.id == form.exit } && form.entry != form.exit
     val address = form.address.trim()
+    fun certificatePathsValid(usePanel: Boolean, certificate: String, key: String): Boolean = usePanel ||
+        certificate.trim().startsWith('/') && key.trim().startsWith('/') && certificate.length <= 4096 && key.length <= 4096 &&
+            certificate.none { it.isISOControl() } && key.none { it.isISOControl() }
+    val hysteriaCertificatesValid = certificatePathsValid(form.entryUsePanelCertificate, form.entryCertificateFile, form.entryKeyFile) &&
+        certificatePathsValid(form.exitUsePanelCertificate, form.exitCertificateFile, form.exitKeyFile)
     val settingsValid = form.entryPort.toIntOrNull() in 1..65535 && form.exitPort.toIntOrNull() in 1..65535 &&
         address.isNotBlank() && address.none { it.isWhitespace() || it.isISOControl() || it in "/?#@" } &&
-        form.entrySni.isNotBlank() && form.exitSni.isNotBlank() && form.fingerprint.isNotBlank() &&
+        (form.protocol == CascadeProtocol.AMNEZIAWG || form.entrySni.isNotBlank() && form.exitSni.isNotBlank()) &&
+        (form.protocol != CascadeProtocol.VLESS_REALITY || form.fingerprint.isNotBlank()) &&
+        (form.protocol != CascadeProtocol.HYSTERIA2 || form.hysteriaAlpn.trim().matches(Regex("[A-Za-z0-9._-]{1,64}")) && hysteriaCertificatesValid) &&
+        (form.protocol != CascadeProtocol.AMNEZIAWG || form.awgMtu.toIntOrNull() in 576..65535 &&
+            listOf(form.awgPrimaryDns, form.awgSecondaryDns).all { it.matches(Regex("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}")) }) &&
         cascadeFlag(form.entryName) != null && cascadeFlag(form.exitName) != null &&
         (entryFlag == null || cascadeFlag(form.entryName) == entryFlag) &&
         (exitFlag == null || cascadeFlag(form.exitName) == exitFlag) && form.allowRestart &&
@@ -877,8 +889,19 @@ internal fun CascadeWizardScreen(
         (error ?: lastError)?.takeUnless { it == cascade.journalError }?.let { ServerUiError(it) }
         when (step) {
             0 -> {
-                ServerUiHeading("Выберите входной узел")
+                ServerUiHeading("Выберите протокол и входной узел")
                 ServerUiCaption("Мастер позволит в три шага создать мост между серверами. Клиент подключается к входному узлу, далее трафик перенаправляется на выходной узел автоматически")
+                CascadeChoice("Протокол", when (form.protocol) {
+                    CascadeProtocol.VLESS_REALITY -> "VLESS + REALITY"
+                    CascadeProtocol.HYSTERIA2 -> "Hysteria2"
+                    CascadeProtocol.AMNEZIAWG -> "AmneziaWG"
+                }, listOf("VLESS + REALITY", "Hysteria2", "AmneziaWG"), editable) { value ->
+                    model.selectCascadeProtocol(when (value) {
+                        "Hysteria2" -> CascadeProtocol.HYSTERIA2
+                        "AmneziaWG" -> CascadeProtocol.AMNEZIAWG
+                        else -> CascadeProtocol.VLESS_REALITY
+                    })
+                }
                 CascadePanelChoice("Панель входа", panels, form.entry, editable) { id ->
                     panels.firstOrNull { it.id == id }?.let { selectPanel(true, it) }
                 }
@@ -917,9 +940,45 @@ internal fun CascadeWizardScreen(
                 ServerUiField(form.address, { value -> addressEdited = true; model.updateCascadeForm { it.copy(address = value) } }, "Адрес выходного VPN-сервера", enabled = editable,
                     hint = "Домен или IP сервера. Адрес панели может указывать на прокси; проверьте его.")
                 val sniChoices = remember { InboundDraft().sniChoices().filter { it.isNotBlank() }.distinct() }
-                CascadeChoice("Транспорт", form.transport.name, listOf("XHTTP", "TCP"), editable) { value -> model.updateCascadeForm { it.copy(transport = CascadeTransport.valueOf(value)) } }
-                CascadeChoice("SNI", form.entrySni, sniChoices, editable) { value -> model.updateCascadeForm { it.copy(entrySni = value, exitSni = value) } }
-                CascadeChoice("Fingerprint", form.fingerprint, InboundDraft.fingerprints.filter { it.isNotBlank() && it != "unsafe" }, editable) { value -> model.updateCascadeForm { it.copy(fingerprint = value) } }
+                if (form.protocol == CascadeProtocol.VLESS_REALITY) {
+                    CascadeChoice("Транспорт", form.transport.name, listOf("XHTTP", "TCP"), editable) { value -> model.updateCascadeForm { it.copy(transport = CascadeTransport.valueOf(value)) } }
+                    CascadeChoice("SNI", form.entrySni, sniChoices, editable) { value -> model.updateCascadeForm { it.copy(entrySni = value, exitSni = value) } }
+                    CascadeChoice("Fingerprint", form.fingerprint, InboundDraft.fingerprints.filter { it.isNotBlank() && it != "unsafe" }, editable) { value -> model.updateCascadeForm { it.copy(fingerprint = value) } }
+                } else if (form.protocol == CascadeProtocol.HYSTERIA2) {
+                    ServerUiField(form.entrySni, { value -> model.updateCascadeForm { it.copy(entrySni = value) } }, "SNI входного Hysteria2", enabled = editable, maxLength = 253,
+                        hint = "Домен или IP входной панели.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = form.entryUsePanelCertificate, onCheckedChange = { enabled ->
+                            model.updateCascadeForm { it.copy(entryUsePanelCertificate = enabled) }
+                        }, enabled = editable)
+                        Text("Использовать сертификат панели", color = LocalXBoardPalette.current.secondary, fontSize = 12.sp, maxLines = 1)
+                    }
+                    if (!form.entryUsePanelCertificate) {
+                        ServerUiField(form.entryCertificateFile, { value -> model.updateCascadeForm { it.copy(entryCertificateFile = value) } }, "Certificate входа", enabled = editable, maxLength = 4096, hint = "Абсолютный путь к certificate file.")
+                        ServerUiField(form.entryKeyFile, { value -> model.updateCascadeForm { it.copy(entryKeyFile = value) } }, "Key входа", enabled = editable, maxLength = 4096, hint = "Абсолютный путь к key file.")
+                    }
+                    ServerUiField(form.exitSni, { value -> model.updateCascadeForm { it.copy(exitSni = value) } }, "SNI выходного Hysteria2", enabled = editable, maxLength = 253,
+                        hint = "Домен или IP выходной панели.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = form.exitUsePanelCertificate, onCheckedChange = { enabled ->
+                            model.updateCascadeForm { it.copy(exitUsePanelCertificate = enabled) }
+                        }, enabled = editable)
+                        Text("Использовать сертификат панели", color = LocalXBoardPalette.current.secondary, fontSize = 12.sp, maxLines = 1)
+                    }
+                    if (!form.exitUsePanelCertificate) {
+                        ServerUiField(form.exitCertificateFile, { value -> model.updateCascadeForm { it.copy(exitCertificateFile = value) } }, "Certificate выхода", enabled = editable, maxLength = 4096, hint = "Абсолютный путь к certificate file.")
+                        ServerUiField(form.exitKeyFile, { value -> model.updateCascadeForm { it.copy(exitKeyFile = value) } }, "Key выхода", enabled = editable, maxLength = 4096, hint = "Абсолютный путь к key file.")
+                    }
+                    ServerUiField(form.hysteriaAlpn, { value -> model.updateCascadeForm { it.copy(hysteriaAlpn = value) } }, "ALPN Hysteria2", enabled = editable, maxLength = 64,
+                        hint = "По умолчанию h3. Firewall и UDP-маршрут между узлами не проверяются автоматически.")
+                } else {
+                    ServerUiCaption("AmneziaWG использует UDP; TLS, SNI и сертификаты не применяются.")
+                    ServerUiField(form.awgMtu, { value -> model.updateCascadeForm { it.copy(awgMtu = value) } }, "MTU", enabled = editable, maxLength = 5,
+                        hint = "По умолчанию 1280. Изменяйте только при известной проблеме MTU.")
+                    ServerUiField(form.awgPrimaryDns, { value -> model.updateCascadeForm { it.copy(awgPrimaryDns = value) } }, "Основной DNS", enabled = editable, maxLength = 15)
+                    ServerUiField(form.awgSecondaryDns, { value -> model.updateCascadeForm { it.copy(awgSecondaryDns = value) } }, "Резервный DNS", enabled = editable, maxLength = 15)
+                    ServerUiCaption("Ключи, технические peer, подсети и параметры маскировки создаются автоматически. Внешняя UDP-доступность не проверяется автоматически.")
+                }
                 if (entryFlag == null) ServerUiField(form.entryName, { value -> model.updateCascadeForm { it.copy(entryName = value) } }, "Флаг входа", enabled = editable, maxLength = 90, hint = "Флаг страны или код вида :DE:.")
                 if (exitFlag == null) ServerUiField(form.exitName, { value -> model.updateCascadeForm { it.copy(exitName = value) } }, "Флаг выхода", enabled = editable, maxLength = 90, hint = "Флаг страны или код вида :DE:.")
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1073,7 +1132,10 @@ private fun CascadePanelChoice(label: String, panels: List<PanelSummary>, select
     var expanded by remember { mutableStateOf(false) }
     fun title(panel: PanelSummary): String {
         val location = panel.location
-        return listOfNotNull(panel.name.ifBlank { panel.id }, location?.countryFlag?.takeIf { it.isNotBlank() },
+        val name = app.invilink.xboard.panels.panelDisplayName(
+            panel.name, panel.displayAddress ?: location?.ipAddress, panel.domainAddress,
+        )
+        return listOfNotNull(name, location?.countryFlag?.takeIf { it.isNotBlank() },
             location?.countryName?.takeIf { it.isNotBlank() }).joinToString(" · ")
     }
     ServerUiTitle(label)

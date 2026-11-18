@@ -1,0 +1,90 @@
+{
+  "method": "APT download and dpkg-deb extraction, no system installation",
+  "packages": [
+    {
+      "package": "python3-cairosvg",
+      "version": "2.8.2-1",
+      "file": "python3-cairosvg_2.8.2-1_all.deb",
+      "size": 36514,
+      "sha256": "07875e9f835eb31d94db8ca7f489411aae0d5320941453ebc1d0e164018901db",
+      "apt_filename": "pool/universe/c/cairosvg/python3-cairosvg_2.8.2-1_all.deb"
+    },
+    {
+      "package": "python3-cairocffi",
+      "version": "1.7.1-5",
+      "file": "python3-cairocffi_1.7.1-5_all.deb",
+      "size": 52842,
+      "sha256": "8590890055af75d53107b309a84b3accb23ed3bb1a4634aa3e3d1479388b640e",
+      "apt_filename": "pool/universe/c/cairocffi/python3-cairocffi_1.7.1-5_all.deb"
+    },
+    {
+      "package": "python3-cffi",
+      "version": "2.0.0-3build1",
+      "file": "python3-cffi_2.0.0-3build1_all.deb",
+      "size": 75444,
+      "sha256": "b156010e365d38e857b08e9e5c6b1eb0cc1aba6c6ea4ff8929914726711730ac",
+      "apt_filename": "pool/main/p/python-cffi/python3-cffi_2.0.0-3build1_all.deb"
+    },
+    {
+      "package": "python3-cssselect2",
+      "version": "0.9.0-1",
+      "file": "python3-cssselect2_0.9.0-1_all.deb",
+      "size": 15878,
+      "sha256": "41a72f7ddc17d1c8aa88253d20009aa28d054a7f9f9f4cef9fdeee4ab080ebdc",
+      "apt_filename": "pool/universe/p/python-cssselect2/python3-cssselect2_0.9.0-1_all.deb"
+    },
+    {
+      "package": "python3-tinycss2",
+      "version": "1.5.1-1",
+      "file": "python3-tinycss2_1.5.1-1_all.deb",
+      "size": 23312,
+      "sha256": "25e0c25c0ad13fff11ec5965d700e59708c460c0db4f9d1c9496005380f1b7bf",
+      "apt_filename": "pool/universe/p/python-tinycss2/python3-tinycss2_1.5.1-1_all.deb"
+    },
+    {
+      "package": "python3-defusedxml",
+      "version": "0.7.1-3build1",
+      "file": "python3-defusedxml_0.7.1-3build1_all.deb",
+      "size": 42370,
+      "sha256": "82a9e873b79a8d97727287da1c5ee25d4c5e708135c4a8961881357255465321",
+      "apt_filename": "pool/main/d/defusedxml/python3-defusedxml_0.7.1-3build1_all.deb"
+    },
+    {
+      "package": "python3-webencodings",
+      "version": "0.5.1-5build1",
+      "file": "python3-webencodings_0.5.1-5build1_all.deb",
+      "size": 11684,
+      "sha256": "b239c9f4d122441e75676527faa1e3faaee36bb61e92e14b794c79569640b218",
+      "apt_filename": "pool/main/p/python-webencodings/python3-webencodings_0.5.1-5build1_all.deb"
+    },
+    {
+      "package": "python3-pycparser",
+      "version": "3.0-1",
+      "file": "python3-pycparser_3.0-1_all.deb",
+      "size": 61622,
+      "sha256": "647068403275d4b01bc5237a537a3be07bb4f03599471ea548231bb215dd6d86",
+      "apt_filename": "pool/main/p/pycparser/python3-pycparser_3.0-1_all.deb"
+    }
+  ],
+  "python_path": "vendor/usr/lib/python3/dist-packages",
+  "venv_path": "venv/bin/python",
+  "verification": {
+    "sha256": "Every archive matched the SHA256 and size from local APT indices before extraction",
+    "limits": [
+      "Existing local APT indices were used; no apt update or fresh InRelease signature verification was performed",
+      "No independent PyPI JSON or second-source hash verification; PyPI timed out after 5 seconds",
+      "APT downloads used the configured Ubuntu HTTP repository; archive integrity was checked against local APT hashes",
+      "This is a minimal runtime extraction, not a complete Debian package installation",
+      "Unused Debian dependencies lxml, xcffib and tinycss2 test data were not downloaded",
+      "System Python, Pillow, NumPy, CFFI backend and Cairo remain external dependencies and may change on OS updates"
+    ]
+  },
+  "system_packages": [
+    "libcairo2\t1.18.4-3\tamd64",
+    "libgdk-pixbuf-2.0-0\t2.44.5+dfsg-4ubuntu1\tamd64",
+    "python3-cffi-backend\t2.0.0-3build1\tamd64",
+    "python3-numpy\t1:2.3.5+ds-3ubuntu1\tamd64",
+    "python3-pil\t12.1.1-2ubuntu1.3\tamd64",
+    "python3-setuptools\t78.1.1-0.1build1\tall"
+  ]
+}

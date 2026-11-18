@@ -37,6 +37,7 @@ import app.invilink.xboard.panels.CascadeMetadata
 import app.invilink.xboard.panels.CascadeStep
 import app.invilink.xboard.panels.PanelAvailability
 import app.invilink.xboard.panels.PanelSummary
+import app.invilink.xboard.panels.panelDisplayName
 import app.invilink.xboard.panels.visibleCascade
 import app.invilink.xboard.panels.privateName
 import java.util.Locale
@@ -117,6 +118,7 @@ private fun CascadeNodeCard(
     val exitFlag = summaries[cascade.exitPanelId]?.location?.countryFlag.orEmpty()
     val inboundId = if (entry) cascade.entryInboundId else cascade.exitInboundId
     val complete = cascade.step == CascadeStep.COMPLETE && !cascade.inFlight
+    val canSafelyCleanupIncomplete = cascade.inFlight && cascade.step in setOf(CascadeStep.ENTRY_INBOUND, CascadeStep.ENTRY_CLIENT) && cascade.entryInboundCreated
     val palette = LocalXBoardPalette.current
     var confirming by remember(cascade.id) { mutableStateOf(false) }
     var confirmingForget by remember(cascade.id) { mutableStateOf(false) }
@@ -140,9 +142,13 @@ private fun CascadeNodeCard(
         confirmButton = { TextButton(onClick = { showSnapshot = false }) { Text("Закрыть") } },
     )
     if (confirming) DeletionConfirmationDialog(
-        title = if (cascade.inFlight) "Удалить запись незавершённой операции?" else "Удалить каскад?",
-        warning = if (cascade.inFlight) "На панелях ничего не будет удалено или восстановлено. Результат последнего запроса неизвестен; проверьте обе панели вручную. Снимки из этого журнала будут потеряны." else "Запись всего каскада будет удалена с устройства. Приложение попытается очистить обе панели: созданные инбаунды удаляются вместе с их подключениями, общие клиенты целиком не удаляются. Если панель недоступна или проверка не пройдёт, данные на ней могут остаться — проверьте их вручную. Снимки из записи будут потеряны; очистка не атомарна.",
-        onConfirm = { confirming = false; if (cascade.inFlight) onForgetIncomplete(cascade) else onDelete(cascade) }, onDismiss = { confirming = false },
+        title = if (cascade.inFlight && !canSafelyCleanupIncomplete) "Удалить запись незавершённой операции?" else "Удалить каскад?",
+        warning = when {
+            cascade.inFlight && canSafelyCleanupIncomplete -> "Приложение проверит и удалит только созданный входной инбаунд с совпадающими tag и именем. При несовпадении запись останется для ручной проверки."
+            cascade.inFlight -> "На панелях ничего не будет удалено или восстановлено. Результат последнего запроса неизвестен; проверьте обе панели вручную. Снимки из этого журнала будут потеряны."
+            else -> "Запись всего каскада будет удалена с устройства. Приложение попытается очистить обе панели: созданные инбаунды удаляются вместе с подключениями, общие клиенты целиком не удаляются. Если панель недоступна или проверка не пройдёт, данные на ней могут остаться — проверьте их вручную. Снимки из записи будут потеряны; очистка не атомарна."
+        },
+        onConfirm = { confirming = false; if (cascade.inFlight && !canSafelyCleanupIncomplete) onForgetIncomplete(cascade) else onDelete(cascade) }, onDismiss = { confirming = false },
     )
     Surface(
         onClick = {
@@ -161,10 +167,16 @@ private fun CascadeNodeCard(
                 val country = panel?.location?.let {
                     Locale("", it.countryCode).getDisplayCountry(Locale("ru")).ifBlank { it.countryName }
                 }?.takeIf { it.isNotBlank() }
+                val realIp = panel?.location?.ipAddress ?: panel?.displayAddress
+                val customName = panel?.name?.trim().orEmpty().takeIf { it.isNotEmpty() && !it.equals("IP", true) && !it.equals("DOMAIN", true) }
+                val nodeName = panel?.let { panelDisplayName(it.name, realIp, it.domainAddress) } ?: "Панель не найдена"
                 val nodeTitle = if (entry) "Входной узел" else "Выходной узел"
-                Text(country ?: panel?.name ?: "Панель не найдена", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(country ?: "Неизвестная страна", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(nodeTitle, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.secondary)
-                if (country != null) Text(panel?.name ?: "Панель не найдена", style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                Text(nodeName, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                if (customName != null && realIp?.isNotBlank() == true && realIp != nodeName) {
+                    Text(realIp, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                }
                 if (!cascade.entryInboundCreated || !cascade.exitInboundCreated) {
                     Text("Восстановление существующих инбаундов выполняется с проверкой изменений; при конфликте журнал сохраняется.",
                         style = MaterialTheme.typography.bodySmall, color = palette.secondary)

@@ -68,7 +68,7 @@ class PanelLocationResolver {
         context.ensureActive()
         if (addresses.isEmpty() || addresses.any { !isPublicAddress(it) }) return null
         val ip = addresses.first().hostAddress ?: return null
-        val url = URI("https", null, "ipwho.is", -1, "/$ip", null, null).toURL()
+        val url = URI("https", null, "ipwho.is", -1, "/$ip", "lang=ru", null).toURL()
         val connection = url.openConnection() as HttpsURLConnection
         try {
             connection.requestMethod = "GET"

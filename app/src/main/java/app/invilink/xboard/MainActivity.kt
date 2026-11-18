@@ -96,12 +96,17 @@ import app.invilink.xboard.ui.AddClientScreen
 import app.invilink.xboard.ui.ClientDetailsDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.Modifier
@@ -112,7 +117,12 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import app.invilink.xboard.ui.AddPanelScreen
 import app.invilink.xboard.ui.HomeScreen
@@ -188,6 +198,11 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             UpdateScheduler.availableEvents.collect { model.showPendingUpdate() }
         }
+        val changelogPreferences = getSharedPreferences("version_changelog", MODE_PRIVATE)
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        val appWasUpdated = packageInfo.lastUpdateTime > packageInfo.firstInstallTime
+        val showVersion103Changelog = appWasUpdated && BuildConfig.VERSION_NAME == "1.0.3" &&
+            changelogPreferences.getString("shown_version", null) != BuildConfig.VERSION_NAME
         setContent {
             val state by model.state.collectAsStateWithLifecycle()
             val updateState by model.update.collectAsStateWithLifecycle()
@@ -216,6 +231,7 @@ class MainActivity : FragmentActivity() {
             var sidebarAdministration by remember { mutableStateOf(false) }
             var quickMenuOpen by remember { mutableStateOf(false) }
             var protectionMenuOpen by remember { mutableStateOf(false) }
+            var showVersionChangelog by remember { mutableStateOf(showVersion103Changelog) }
             var webUiWasBusy by remember { mutableStateOf(false) }
             LaunchedEffect(state.serverState.webUiBusy) {
                 if (webUiWasBusy && !state.serverState.webUiBusy) protectionMenuOpen = false
@@ -306,10 +322,11 @@ class MainActivity : FragmentActivity() {
                               model.refreshCascadeJournal()
                           }
                       }
-                      val administrationChoices = state.panels.map { panel ->
-                          val host = model.administrationPanelConfig(panel.id)?.baseUrl?.let { runCatching { java.net.URI(it).host }.getOrNull() }
-                          panel.id to listOfNotNull(panel.name.takeIf { it.isNotBlank() }, host?.takeIf { it.isNotBlank() }).distinct().joinToString(" · ").ifBlank { "Панель 3x-UI" }
-                      }
+                       val administrationChoices = state.panels.map { panel ->
+                           val host = model.administrationPanelConfig(panel.id)?.baseUrl?.let { runCatching { java.net.URI(it).host?.removeSurrounding("[", "]") }.getOrNull() }
+                           val domain = host?.takeIf { value -> !value.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) && ':' !in value }
+                           panel.id to app.invilink.xboard.panels.panelDisplayName(panel.name, panel.location?.ipAddress ?: host, domain)
+                       }
                       Box(Modifier.fillMaxSize().background(LocalXBoardPalette.current.background)) {
                  val screens: @Composable () -> Unit = {
                    val routingServer = if (authorized) routingPanelId?.let(model::administrationPanelConfig) else null
@@ -748,7 +765,17 @@ class MainActivity : FragmentActivity() {
                                onAbout = { model.openFromSettingsMenu(Stage.ABOUT) },
                           )
                       }
-                     if (state.agreementOpen) AgreementDialog(model::closeAgreement)
+                       if (showVersionChangelog && state.stage == Stage.HOME && !state.stealthMode && !state.agreementOpen) {
+                           Version103ChangelogDialog(
+                               onDismiss = {
+                                   changelogPreferences.edit()
+                                       .putString("shown_version", BuildConfig.VERSION_NAME)
+                                       .apply()
+                                   showVersionChangelog = false
+                               },
+                           )
+                       }
+                      if (state.agreementOpen) AgreementDialog(model::closeAgreement)
                      if (state.pinChangeOpen) {
                          PinChangeDialog(
                              busy = state.busy,
@@ -1074,6 +1101,84 @@ class MainActivity : FragmentActivity() {
     private companion object {
         const val OFFLINE_CHANNEL_ID = "connectivity_status"
         const val OFFLINE_NOTIFICATION_ID = 3101
+    }
+}
+
+@Composable
+private fun Version103ChangelogDialog(onDismiss: () -> Unit) {
+    val palette = LocalXBoardPalette.current
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = palette.background,
+        titleContentColor = palette.foreground,
+        textContentColor = palette.foreground,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "Что нового",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Surface(
+                    shape = RoundedCornerShape(99.dp),
+                    color = palette.accent,
+                    contentColor = palette.onAccent,
+                ) {
+                    Text(
+                        text = "Версия 1.0.3",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Version103ChangelogItem(
+                    number = "1",
+                    text = "Расширен мастер каскада для работы с протоколами Hysteria2 и AmneziaWG 3.1.",
+                )
+                Version103ChangelogItem(
+                    number = "2",
+                    text = "Перерисованы карточки и добавлены новые информационные разделы.",
+                )
+                Version103ChangelogItem(
+                    number = "3",
+                    text = "Мелкие исправления и доработки.",
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text("Понятно", fontWeight = FontWeight.SemiBold)
+            }
+        },
+    )
+}
+
+@Composable
+private fun Version103ChangelogItem(number: String, text: String) {
+    val palette = LocalXBoardPalette.current
+    Row(verticalAlignment = Alignment.Top) {
+        Surface(
+            modifier = Modifier.size(28.dp),
+            shape = RoundedCornerShape(14.dp),
+            color = palette.soft,
+            contentColor = palette.foreground,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(number, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = text,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
+            color = palette.foreground,
+        )
     }
 }
 

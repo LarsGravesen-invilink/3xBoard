@@ -76,6 +76,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -399,32 +400,37 @@ private fun InboundBlock(
     val glow = rememberRefreshGlow(inbound.id, refreshResult?.id, refreshResult?.completedAt, refreshResult?.enabled?.get(inbound.id))
     DetailBlock(glow = glow) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).clickable(onClick = onExpand).padding(vertical = 6.dp)) {
+            BoxWithConstraints(Modifier.weight(1f).clickable(onClick = onExpand).padding(vertical = 6.dp)) {
+                val titleSize = ((maxWidth.value - 20f).coerceAtLeast(1f) / (inbound.name.length.coerceAtLeast(1) * 0.55f)).coerceIn(1f, 22f)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(inbound.name, modifier = Modifier.weight(1f, fill = false), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Box(Modifier.size(12.dp).background(if (inbound.enabled) Color(0xFF35B75C) else Color(0xFFD84747), androidx.compose.foundation.shape.CircleShape)
+                    Text(inbound.name, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
+                        fontSize = titleSize.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+                    Box(Modifier.size(12.dp).padding(end = 14.dp).background(if (inbound.enabled) Color(0xFF35B75C) else Color(0xFFD84747), androidx.compose.foundation.shape.CircleShape)
                         .semantics { contentDescription = if (inbound.enabled) "Инбаунд включён" else "Инбаунд выключен" })
                 }
-                Text("${inbound.protocol.uppercase()} · ${inbound.port}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
             }
-            if (allowEditInbound) BoardIconButton(onClick = onSettings, enabled = enabled, modifier = Modifier.size(48.dp).semantics { contentDescription = "Настройки инбаунда ${inbound.name}" }) {
+            if (allowEditInbound) BoardIconButton(onClick = onSettings, enabled = enabled,
+                modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(palette.soft, androidx.compose.foundation.shape.CircleShape)
+                    .border(1.dp, palette.line, androidx.compose.foundation.shape.CircleShape)
+                    .semantics { contentDescription = "Настройки инбаунда ${inbound.name}" }) {
                 BoardIcon(BoardSymbol.Edit, palette.foreground, 22.dp)
             }
-            if (allowDeleteInbound) BoardIconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(48.dp).semantics { contentDescription = "Удалить инбаунд ${inbound.name}" }) {
+            if (allowDeleteInbound) BoardIconButton(onClick = onDelete, enabled = enabled,
+                modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(palette.soft, androidx.compose.foundation.shape.CircleShape)
+                    .border(1.dp, palette.line, androidx.compose.foundation.shape.CircleShape)
+                    .semantics { contentDescription = "Удалить инбаунд ${inbound.name}" }) {
                 BoardIcon(BoardSymbol.Trash, palette.foreground, 22.dp)
             }
         }
-        BlockDivider()
-        if (cascadeInbound) {
-            Text("SNI: ${inbound.sni.ifBlank { "—" }}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-            BlockDivider()
-            Text("Транспорт: ${inbound.network} · Протокол: ${inbound.protocol.uppercase()} · Защита: ${inbound.security}",
-                style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-        } else {
-            Text("Транспорт: ${inbound.network} · Защита: ${inbound.security}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-            TrafficSummary(inbound.up, inbound.down, inbound.total)
-            Text("Срок: ${expiryLabel(inbound.expiry)}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            InboundTag(inbound.protocol.uppercase(), inboundProtocolColor(inbound.protocol))
+            InboundTag("${inbound.port}", inboundPortColor())
         }
+        BlockDivider()
+        InboundConnectionColumns(inbound)
+        InboundTrafficSummary(inbound.up, inbound.down, inbound.total, inbound.expiry)
         if (cascadeInbound && !serviceClientName.isNullOrBlank() && inbound.clients.any { it.email == serviceClientName }) {
             val online = onlineClients?.contains(serviceClientName)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -458,10 +464,12 @@ private fun InboundBlock(
 @Composable
 private fun ClientListDisclosure(expanded: Boolean, count: Int, onToggle: () -> Unit) {
     val palette = LocalXBoardPalette.current
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(16.dp)
+    val glowColor = Color(0xFF79D9FF).copy(alpha = if (palette.isDark) 0.18f else 0.28f)
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(shape)
-            .background(palette.soft).border(1.dp, palette.line, shape)
+        Modifier.fillMaxWidth().heightIn(min = 50.dp).shadow(6.dp, shape,
+            ambientColor = glowColor, spotColor = glowColor).clip(shape)
+            .background(palette.soft).border(1.dp, Color(0xFF79D9FF).copy(alpha = if (palette.isDark) 0.35f else 0.55f), shape)
             .clickable(
                 role = Role.Button,
                 onClickLabel = if (expanded) "Свернуть список клиентов" else "Раскрыть список клиентов",
@@ -473,7 +481,7 @@ private fun ClientListDisclosure(expanded: Boolean, count: Int, onToggle: () -> 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "Список клиентов", Modifier.weight(1f),
+            "Созданные клиенты", Modifier.weight(1f),
             style = MaterialTheme.typography.bodyLarge, color = palette.foreground,
         )
         Text(count.toString(), style = MaterialTheme.typography.labelLarge, color = palette.secondary)
@@ -498,15 +506,19 @@ private fun ClientRow(client: ClientDetail, onClick: () -> Unit, onEdit: () -> U
         text = { Text("Клиент используется для связки серверов. Использование и редактирование запрещено в целях обеспечения целостности маршрута") },
         confirmButton = { TextButton(onClick = { protectedNotice = false }) { Text("Закрыть") } },
     )
+    val cardShape = RoundedCornerShape(14.dp)
+    val cardBorder = if (palette.isDark) Color.White.copy(alpha = 0.48f) else Color(0xFF8E66B8).copy(alpha = 0.78f)
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(palette.soft).clickable(enabled = enabled, onClick = { if (isProtected) protectedNotice = true else onClick() }).padding(12.dp),
+        Modifier.fillMaxWidth().clip(cardShape).background(palette.soft).border(1.dp, cardBorder, cardShape)
+            .clickable(enabled = enabled, onClick = { if (isProtected) protectedNotice = true else onClick() }).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             val flag = countryFlagForClientName(client.visibleName)
             if (flag.isNotEmpty()) Text(flag, Modifier.padding(end = 8.dp), fontSize = 26.sp)
-            Text(clientDisplayName(client.visibleName).ifBlank { "Клиент без имени" }, Modifier.weight(1f), fontWeight = FontWeight.SemiBold,
-                style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            BoxWithConstraints(Modifier.weight(1f)) {
+                AdaptiveClientName(clientDisplayName(client.visibleName).ifBlank { "Клиент без имени" })
+            }
             val powerColor = if (client.enabled) {
                 if (palette.isDark) Color(0xFF8BD69A) else Color(0xFF217336)
             } else {
@@ -519,36 +531,209 @@ private fun ClientRow(client: ClientDetail, onClick: () -> Unit, onEdit: () -> U
                 }) {
                 BoardIcon(BoardSymbol.Power, powerColor.copy(alpha = if (enabled) 1f else 0.45f), 22.dp)
             }
-            BoardIconButton(onClick = onEdit, enabled = enabled && !isProtected, modifier = Modifier.size(48.dp).semantics { contentDescription = "Редактировать клиента ${clientDisplayName(client.visibleName)}" }) {
+            BoardIconButton(onClick = onEdit, enabled = enabled && !isProtected,
+                modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(palette.background, androidx.compose.foundation.shape.CircleShape)
+                    .border(1.dp, palette.line, androidx.compose.foundation.shape.CircleShape)
+                    .semantics { contentDescription = "Редактировать клиента ${clientDisplayName(client.visibleName)}" }) {
                 BoardIcon(BoardSymbol.Edit, palette.foreground, 22.dp)
             }
-            BoardIconButton(onClick = onDelete, enabled = enabled && !isProtected, modifier = Modifier.size(48.dp).semantics { contentDescription = "Удалить клиента ${clientDisplayName(client.visibleName)}" }) {
-                BoardIcon(BoardSymbol.Trash, palette.foreground, 22.dp)
+            BoardIconButton(onClick = onDelete, enabled = enabled && !isProtected,
+                modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                    .background(if (palette.isDark) Color(0xFF6B3D43).copy(alpha = 0.55f) else Color(0xFFF2D5D8), androidx.compose.foundation.shape.CircleShape)
+                    .border(1.dp, if (palette.isDark) Color(0xFFC97780).copy(alpha = 0.65f) else Color(0xFFC97A82).copy(alpha = 0.72f), androidx.compose.foundation.shape.CircleShape)
+                    .semantics { contentDescription = "Удалить клиента ${clientDisplayName(client.visibleName)}" }) {
+                BoardIcon(BoardSymbol.Trash, if (palette.isDark) Color(0xFFF0B6BC) else Color(0xFFAB4650), 22.dp)
             }
         }
         BlockDivider()
-        if (!client.enabled) {
-            Text("Клиент выключен", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Включён", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                Text(when (online) { true -> "Онлайн"; false -> "Оффлайн"; null -> "Активность —" },
-                    style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold,
-                    color = if (online == true) { if (palette.isDark) Color(0xFF8BD69A) else Color(0xFF217336) } else palette.secondary)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (client.enabled) ClientTrafficArrows(client.up, client.down, Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val enabledColor = if (client.enabled) Color(0xFF35B75C) else Color(0xFFD84747)
+                Text(if (client.enabled) "Включен" else "Выключен", style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold, color = enabledColor)
+                if (client.enabled) {
+                    Spacer(Modifier.size(10.dp))
+                    val (status, statusColor) = when (online) {
+                        true -> "Online" to Color(0xFF35B75C)
+                        false -> "Offline" to Color(0xFFD84747)
+                        null -> "—" to palette.secondary
+                    }
+                    Text(status, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = statusColor)
+                }
             }
-            TrafficSummary(client.up, client.down, client.total)
-            Text("Срок: ${expiryLabel(client.expiry)} · Лимит IP: ${client.limitIp?.let { if (it == 0) "нет" else it.toString() } ?: "—"}", style = MaterialTheme.typography.bodySmall)
+        }
+        if (client.enabled) {
+            ClientLimits(client.total, client.expiry, client.limitIp)
             if (client.comment.isNotBlank()) Text(client.comment, style = MaterialTheme.typography.bodySmall, color = palette.secondary)
         }
     }
 }
 
 @Composable
-private fun TrafficSummary(up: Long?, down: Long?, total: Long?) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text("↓ Получено: ${formatTrafficBytes(down)} · ↑ Отправлено: ${formatTrafficBytes(up)}", style = MaterialTheme.typography.bodySmall)
-        Text("Лимит трафика: ${if (total == 0L) "без лимита" else formatTrafficBytes(total)}", style = MaterialTheme.typography.bodySmall, color = LocalXBoardPalette.current.secondary)
+private fun AdaptiveClientName(value: String) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val fontSize = (maxWidth.value / (value.length.coerceAtLeast(1) * 0.55f)).coerceIn(5f, 18f)
+        Text(value, style = MaterialTheme.typography.bodyLarge, fontSize = fontSize.sp, fontWeight = FontWeight.SemiBold,
+            maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
     }
+}
+
+@Composable
+private fun TrafficSummary(up: Long?, down: Long?, total: Long?) {
+    ClientTrafficArrows(up, down)
+    Text("Лимит: ${limitLabel(total)}", style = MaterialTheme.typography.bodySmall, color = LocalXBoardPalette.current.secondary)
+}
+
+@Composable
+private fun InboundTag(value: String, color: Color, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(2.dp)
+    Box(modifier.border(1.dp, color.copy(alpha = 0.9f), shape).background(color.copy(alpha = if (LocalXBoardPalette.current.isDark) 0.18f else 0.14f), shape)
+        .padding(horizontal = 6.dp, vertical = 3.dp), contentAlignment = Alignment.Center) {
+        Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge, color = color)
+    }
+}
+
+@Composable
+internal fun inboundProtocolColor(protocol: String): Color {
+    val dark = LocalXBoardPalette.current.isDark
+    return when (protocol.lowercase()) {
+        "vless" -> if (dark) Color(0xFFB78AD7) else Color(0xFF8D5AAA)
+        "amneziawg" -> if (dark) Color(0xFF76B68B) else Color(0xFF438A58)
+        "hysteria", "hysteria2" -> if (dark) Color(0xFF7EAFE6) else Color(0xFF3B7FBD)
+        else -> LocalXBoardPalette.current.foreground
+    }
+}
+
+@Composable
+private fun inboundPortColor(): Color = if (LocalXBoardPalette.current.isDark) Color(0xFFE9D5FF) else Color(0xFF8E4DC0)
+
+@Composable
+internal fun inboundTransport(inbound: InboundDetail): Pair<String, Color> {
+    val dark = LocalXBoardPalette.current.isDark
+    val udp = if (dark) Color(0xFFFFD54F) else Color(0xFFB17600)
+    val tcp = if (dark) Color(0xFF70C7F3) else Color(0xFF006E9F)
+    val xhttp = if (dark) Color(0xFF3ED6C6) else Color(0xFF007F78)
+    return when (inbound.protocol.lowercase()) {
+        "amneziawg" -> "UDP" to udp
+        "hysteria", "hysteria2" -> "QUIC/UDP" to udp
+        "shadowsocks" -> "TCP/UDP" to tcp
+        else -> when (inbound.network.lowercase()) {
+            "quic", "kcp" -> "UDP" to udp
+            "xhttp" -> inbound.network.uppercase() to xhttp
+            "" -> "—" to LocalXBoardPalette.current.secondary
+            else -> inbound.network.uppercase() to tcp
+        }
+    }
+}
+
+private fun inboundSecurity(inbound: InboundDetail): String = when (inbound.protocol.lowercase()) {
+    "amneziawg" -> "WireGuard"
+    "hysteria", "hysteria2" -> "TLS 1.3"
+    "shadowsocks" -> "Шифрование SS"
+    else -> when (inbound.security.lowercase()) {
+        "", "none" -> "Нет"
+        "reality" -> "REALITY"
+        else -> inbound.security.uppercase()
+    }
+}
+
+private fun inboundUsesSni(inbound: InboundDetail): Boolean = inbound.sni.isNotBlank() &&
+    inbound.protocol.lowercase() in setOf("vless", "vmess", "trojan", "hysteria", "hysteria2")
+
+@Composable
+private fun InboundConnectionColumns(inbound: InboundDetail) {
+    val palette = LocalXBoardPalette.current
+    val transport = inboundTransport(inbound)
+    val columns = buildList {
+        add("Транспорт" to (transport.first to transport.second))
+        add("Защита" to (inboundSecurity(inbound) to palette.foreground))
+        if (inboundUsesSni(inbound)) add("SNI" to (inbound.sni to palette.foreground))
+    }
+    Row(Modifier.fillMaxWidth()) {
+        columns.forEachIndexed { index, (label, value) ->
+            if (index > 0) VerticalMetricDivider()
+            val columnWeight = if (label == "SNI") 1.8f else 1f
+            Column(Modifier.weight(columnWeight).padding(horizontal = if (index == 0) 0.dp else 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(label, style = MaterialTheme.typography.labelSmall, color = palette.secondary)
+                AdaptiveMetricText(value.first, value.second)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdaptiveMetricText(value: String, color: Color) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val fontSize = (maxWidth.value / (value.length.coerceAtLeast(1) * 0.55f)).coerceIn(7f, 16f)
+        Text(value, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+            style = MaterialTheme.typography.bodyMedium, fontSize = fontSize.sp, color = color)
+    }
+}
+
+@Composable
+private fun InboundTrafficSummary(up: Long?, down: Long?, total: Long?, expiry: Long?) {
+    val palette = LocalXBoardPalette.current
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("↓ ${formatTrafficBytes(down)}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+        CompactMetricDivider()
+        Text("↑ ${formatTrafficBytes(up)}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Лимит: ${limitLabel(total)}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+        CompactMetricDivider()
+        Text("Срок: ${expiryCompactLabel(expiry)}", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+    }
+}
+
+@Composable
+private fun ClientTrafficArrows(up: Long?, down: Long?, modifier: Modifier = Modifier) {
+    val palette = LocalXBoardPalette.current
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("↓ ${formatTrafficBytes(down)}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+        CompactMetricDivider()
+        Text("↑ ${formatTrafficBytes(up)}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = palette.foreground)
+    }
+}
+
+@Composable
+private fun ClientLimits(total: Long?, expiry: Long?, limitIp: Int?) {
+    Row(Modifier.fillMaxWidth()) {
+        ClientLimitColumn("Трафик", limitLabel(total), Modifier.weight(1f))
+        VerticalMetricDivider()
+        ClientLimitColumn("Срок", expiryCompactLabel(expiry), Modifier.weight(1f).padding(horizontal = 8.dp))
+        VerticalMetricDivider()
+        ClientLimitColumn("Лимит IP", limitIp?.takeIf { it > 0 }?.toString() ?: "∞", Modifier.weight(1f).padding(start = 8.dp))
+    }
+}
+
+@Composable
+private fun ClientLimitColumn(label: String, value: String, modifier: Modifier) {
+    val palette = LocalXBoardPalette.current
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("$label:", style = MaterialTheme.typography.labelSmall, color = palette.secondary, maxLines = 1)
+        Text(value, style = MaterialTheme.typography.bodySmall, color = palette.foreground, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun CompactMetricDivider() {
+    Box(Modifier.height(20.dp).widthIn(min = 1.dp).background(LocalXBoardPalette.current.line))
+}
+
+@Composable
+private fun VerticalMetricDivider() {
+    Box(Modifier.height(34.dp).widthIn(min = 1.dp).background(LocalXBoardPalette.current.line))
+}
+
+private fun limitLabel(total: Long?): String = if (total == null) "—" else if (total == 0L) "∞" else formatTrafficBytes(total)
+
+private fun expiryCompactLabel(value: Long?): String = when {
+    value == null -> "—"
+    value == 0L -> "∞"
+    value < 0 -> "после старта"
+    else -> DateFormat.getDateInstance(DateFormat.SHORT).format(Date(value))
 }
 
 private fun expiryLabel(value: Long?): String = when {

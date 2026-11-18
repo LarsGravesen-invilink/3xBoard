@@ -102,7 +102,6 @@ internal fun SettingsMenu(
                         },
                     shape = RoundedCornerShape(0.dp),
                     color = palette.background,
-                    border = BorderStroke(1.dp, palette.line.copy(alpha = if (palette.isDark) 0.8f else 1f)),
                     shadowElevation = 12.dp
                 ) {
                     Box(

@@ -1,0 +1,257 @@
+Package: python3-cairosvg
+Source: cairosvg
+Priority: optional
+Section: universe/python
+Installed-Size: 179
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: all
+Version: 2.8.2-1
+Depends: python3-cairocffi, python3-lxml, python3-cssselect2, python3-defusedxml, python3-pil, python3-tinycss2, python3:any
+Filename: pool/universe/c/cairosvg/python3-cairosvg_2.8.2-1_all.deb
+Size: 36514
+MD5sum: d5b552aa43df11efa59ba413440e82ca
+SHA1: 13bd2fc2f02011c35b22f324e1e8fe48e0a3a916
+SHA256: 07875e9f835eb31d94db8ca7f489411aae0d5320941453ebc1d0e164018901db
+SHA512: 112f872e09946797fcee755759ba75e043a68797d11e4c1dbca4451a0c9e08c80a45a8d3b6ddfe4d89a48f844fe8609a35599199935e5777b42cc32a9f2848b6
+Homepage: https://cairosvg.org/
+Description-en: SVG to PDF/PS/PNG converter based on Cairo (Python3 library)
+ CairoSVG is a SVG converter based on Cairo. It can export SVG files to PDF,
+ PostScript and PNG files.
+ The main part of CairoSVG is a SVG parser, trying to follow the SVG 1.1
+ recommendation from the W3C. Once parsed, the result is drawn to a Cairo
+ surface that can be exported to various formats: PDF, PostScript, PNG and
+ even SVG.
+ .
+ This package contains the Python3 version of the library.
+Description-md5: b68f944d0583c279b7258fca0cea0b27
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+
+Package: python3-cairocffi
+Source: cairocffi
+Priority: optional
+Section: universe/python
+Installed-Size: 281
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: all
+Version: 1.7.1-5
+Recommends: libgtk-3-0
+Suggests: python-cairocffi-doc
+Depends: libcairo2, libgdk-pixbuf-2.0-0, python3-cffi, python3-xcffib, python3-cffi-backend-api-min (<= 9729), python3-cffi-backend-api-max (>= 9729), python3:any
+Filename: pool/universe/c/cairocffi/python3-cairocffi_1.7.1-5_all.deb
+Size: 52842
+MD5sum: 72f689d25e61ea0c836c86dd9547f837
+SHA1: 2a3e814bc7ec246c36613e56b28f59caf63eaccf
+SHA256: 8590890055af75d53107b309a84b3accb23ed3bb1a4634aa3e3d1479388b640e
+SHA512: ec20e28bd207a481708a4a79e403c130bcdbe8bab0aca5b1f239832e6cf77ecf98ac3efe3de13a8a8b75335cf69c1336da8f05abba7ba45fcbc95069d485734c
+Homepage: https://doc.courtbouillon.org/cairocffi/
+Description-en: cffi-based cairo bindings for Python (Python3)
+ cairocffi is a CFFI-based drop-in replacement for Pycairo,
+ a set of Python bindings and object-oriented API for cairo.
+ Cairo is a 2D vector graphics library with support for multiple backends
+ including image buffers, PNG, PostScript, PDF, and SVG file output.
+ .
+ This package contains the Python 3 version of cairocffi.
+Description-md5: bb30769126852b120adfc03102b2be21
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+
+Package: python3-cffi
+Source: python-cffi
+Priority: optional
+Section: python
+Installed-Size: 417
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: all
+Version: 2.0.0-3build1
+Suggests: python3-dev
+Depends: python3-cffi-backend (<< 2.0.0-3build1+c), python3-cffi-backend (>= 2.0.0-3build1), python3-setuptools, python3-pycparser, python3:any
+Filename: pool/main/p/python-cffi/python3-cffi_2.0.0-3build1_all.deb
+Size: 75444
+MD5sum: 1077c7a34fa5d0f0b4df8851ee698bf2
+SHA1: 4fc0628e18a2093866f072b332a6faa5c461faaf
+SHA256: b156010e365d38e857b08e9e5c6b1eb0cc1aba6c6ea4ff8929914726711730ac
+SHA512: af0b954adacae7dbc6cdad82ee1be5b94741ceb5f2b91abbd685db7ebcd76fa060f099cbda1a4f780f13def70b39def00cfe6b2ec9916b84072e831c4531a9a7
+Homepage: https://cffi.readthedocs.org/
+Description-en: Foreign Function Interface for Python 3 calling C code
+ Convenient and reliable way of calling C code from Python 3.
+ .
+ The aim of this project is to provide a convenient and reliable way of calling
+ C code from Python. It keeps Python logic in Python, and minimises the C
+ required. It is able to work at either the C API or ABI level, unlike most
+ other approaches, that only support the ABI level.
+ .
+ This package contains the necessary build and runtime support for cffi
+ modules.
+Description-md5: a7ee9c666786a0822a64834a9c8b19f6
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Task: xubuntu-desktop, ubuntustudio-desktop, edubuntu-desktop-gnome, edubuntu-desktop-gnome-raspi
+
+Package: python3-cssselect2
+Source: python-cssselect2
+Priority: optional
+Section: universe/python
+Installed-Size: 78
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: all
+Version: 0.9.0-1
+Suggests: python-cssselect2-doc
+Depends: python3-tinycss2, python3-webencodings, python3:any
+Filename: pool/universe/p/python-cssselect2/python3-cssselect2_0.9.0-1_all.deb
+Size: 15878
+MD5sum: d502ccac7a7c6363d2d0a8b6d12807ef
+SHA1: 9d7cde8ec9678dc9f0ad957e7ac706601b97c5d9
+SHA256: 41a72f7ddc17d1c8aa88253d20009aa28d054a7f9f9f4cef9fdeee4ab080ebdc
+SHA512: ab789c76d835cb810d116372d45cb9adb753243cdf832afc92341ae4f1cb77fed888a8daa0cac87628a752b6ae130e3a30c56de1869d61f94d18cea1c910326f
+Homepage: https://github.com/Kozea/cssselect2/
+Description-en: implementation of CSS3 Selectors (Python3 version)
+ cssselect2 is a straightforward implementation of CSS3 Selectors for markup
+ documents (HTML, XML, etc.) that can be read by ElementTree-like parsers
+ (including cElementTree, lxml, html5lib, etc.)
+ .
+ Unlike cssselect, it does not translate selectors to XPath and therefore does
+ not have all the correctness corner cases that are hard or impossible to fix in
+ cssselect.
+ .
+ This package contains the Python 3 version of the library.
+Description-md5: da3137d8d55e5c20d963cfac52c8e50d
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+
+Package: python3-tinycss2
+Source: python-tinycss2
+Priority: optional
+Section: universe/python
+Installed-Size: 132
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: all
+Version: 1.5.1-1
+Suggests: python-tinycss2-doc
+Depends: python-tinycss2-common, python3-webencodings, python3:any
+Filename: pool/universe/p/python-tinycss2/python3-tinycss2_1.5.1-1_all.deb
+Size: 23312
+MD5sum: 6689a9f28140eb1147e2bad95e1a38bb
+SHA1: b2527cb08e032c1b848acaaec487546cb7c01afd
+SHA256: 25e0c25c0ad13fff11ec5965d700e59708c460c0db4f9d1c9496005380f1b7bf
+SHA512: 8deaf85c0c02862a9055e071521a75f94588538df5830b7fd3f205a1805f930370d61f9ba4255dc77dfc350a3f9d9c3327b6550d1e076cb9dd2c914b0390a3b1
+Homepage: https://github.com/Kozea/tinycss2/
+Description-en: Low-level CSS parser (Python3 version)
+ tinycss2 is a rewrite of tinycss with a simpler API, based on the more recent
+ CSS Syntax Level 3 specification.
+ .
+ tinycss2 is low-level in that it doesn’t parse all of CSS: it doesn't know
+ about the syntax of any specific properties or at-rules. Instead, it provides a
+ set of functions that can be composed to support exactly the parts of CSS
+ you're interested in, including new or non-standard rules or properties,
+ without modifying tinycss or having a complex hook/plugin system.
+ .
+ In many cases, parts of the parsed values (such as the content of a AtRule) is
+ given as component values that can be parsed further with other functions.
+ .
+ This package contains the Python 3 version of the library.
+Description-md5: 971c91506c3aead7fef3a61c1419daea
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Task: ubuntustudio-desktop, edubuntu-desktop-gnome, edubuntu-desktop-gnome-raspi, ubuntucinnamon-desktop-minimal, ubuntucinnamon-desktop, ubuntucinnamon-desktop, ubuntucinnamon-desktop-raspi
+
+Package: python3-defusedxml
+Source: defusedxml
+Priority: optional
+Section: python
+Installed-Size: 112
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: all
+Version: 0.7.1-3build1
+Depends: python3:any
+Filename: pool/main/d/defusedxml/python3-defusedxml_0.7.1-3build1_all.deb
+Size: 42370
+MD5sum: 94ca01548e1e3378f52623bbd19dcbb1
+SHA1: 7c10e607c99340a31a376699f53a2bab1e30eaf6
+SHA256: 82a9e873b79a8d97727287da1c5ee25d4c5e708135c4a8961881357255465321
+SHA512: a52036ef5b0bee65f51a847215a4b54f8f73530b1e0bde861c39aaca3523cc111209ecf8daaa9baa6acc3a30c463b2d1714341e29c7689e61ddfbe9d22117138
+Homepage: https://github.com/tiran/defusedxml
+Description-en: XML bomb protection for Python stdlib modules (for Python 3)
+ The results of an attack on a vulnerable XML library can be fairly dramatic.
+ With just a few hundred bytes of XML data an attacker can occupy several
+ gigabytes of memory within seconds. An attacker can also keep
+ CPUs busy for a long time with a small to medium size request.
+ .
+ This library allows for XML to be parsed in a manner that avoids these
+ pitfalls.
+ .
+ This package contains the module for the Python 3 interpreter.
+Description-md5: 549a7cd5c7a5e1aa0b4af5917926335f
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+
+Package: python3-webencodings
+Source: python-webencodings
+Priority: optional
+Section: python
+Installed-Size: 56
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: all
+Version: 0.5.1-5build1
+Depends: python3:any
+Filename: pool/main/p/python-webencodings/python3-webencodings_0.5.1-5build1_all.deb
+Size: 11684
+MD5sum: 858e529f893662df3b9b3f598505a6d7
+SHA1: df751de8568c49697d7a43fca33d42d80cabdc80
+SHA256: b239c9f4d122441e75676527faa1e3faaee36bb61e92e14b794c79569640b218
+SHA512: 55f7a2354db7402af858bd1fa820d20828ac43c45225e37cfba24e5f9fc9f8cbc421a9d67c8c50b3f1a679a44643c6d79ad261ff809e8d0f226552711af1e578
+Homepage: https://pythonhosted.org/webencodings/
+Description-en: Python implementation of the WHATWG Encoding standard
+ In order to be compatible with legacy web content when interpreting something
+ like Content-Type: text/html; charset=latin1, tools need to use a particular
+ set of aliases for encoding labels as well as some overriding rules.  For
+ example, US-ASCII and iso-8859-1 on the web are actually aliases for
+ windows-1252, and an UTF-8 or UTF-16 BOM takes precedence over any other
+ encoding declaration.  The Encoding standard defines all such details so that
+ implementations do not have to reverse-engineer each other.
+ .
+ This module has encoding labels and BOM detection, but the actual
+ implementation for encoders and decoders is Python’s.
+ .
+ This package provides the module for Python 3.
+Description-md5: 09618375d1b6526315c1f9714467ff3f
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Task: kubuntu-desktop, kubuntu-full, ubuntustudio-desktop, ubuntukylin-desktop, ubuntukylin-desktop, ubuntukylin-desktop-minimal, ubuntu-budgie-desktop, ubuntu-budgie-desktop-raspi, edubuntu-desktop-gnome, edubuntu-desktop-gnome-raspi, ubuntucinnamon-desktop-minimal, ubuntucinnamon-desktop, ubuntucinnamon-desktop, ubuntucinnamon-desktop-raspi
+
+Package: python3-pycparser
+Source: pycparser
+Priority: optional
+Section: python
+Installed-Size: 432
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Architecture: all
+Version: 3.0-1
+Suggests: cpp
+Depends: python3:any
+Filename: pool/main/p/pycparser/python3-pycparser_3.0-1_all.deb
+Size: 61622
+MD5sum: aced1a43d28e2d6bfc1ea1671a531e01
+SHA1: f60d350013b3bc0e0bda6105fa8ca2bef70b5c08
+SHA256: 647068403275d4b01bc5237a537a3be07bb4f03599471ea548231bb215dd6d86
+SHA512: f6f624900e4197431b4b261da3a1128798e1e276a634a0583470a28e95d119c21ae9cdfcb208ddd77dbd63fb083b082cf91f756077c6c75b22161a79ddbb52f6
+Homepage: https://github.com/eliben/pycparser
+Description-en: C parser in Python 3
+ pycparser is a complete parser of the C language, written in pure Python using
+ the PLY parsing library. It parses C code into an AST and can serve as a
+ front-end for C compilers or analysis tools.
+ .
+ This package contains the Python 3 version.
+Description-md5: 851cdb20f9e251211911fe1b50030bd3
+Original-Maintainer: Debian Python Team <team+python@tracker.debian.org>
+Origin: Ubuntu
+Bugs: https://bugs.launchpad.net/ubuntu/+filebug
+Task: xubuntu-desktop, ubuntustudio-desktop, edubuntu-desktop-gnome, edubuntu-desktop-gnome-raspi
+

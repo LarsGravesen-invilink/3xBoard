@@ -348,7 +348,7 @@ class PanelApi {
         for (i in 0 until outbounds.length()) {
             val item = outbounds.getJSONObject(i)
             if (item.optString("tag") == outboundTag) {
-                check(!removedOutbound && item.optString("protocol") == "vless") { "Исходящее соединение каскада изменено." }
+                check(!removedOutbound && item.optString("protocol") in setOf("vless", "hysteria", "amneziawg")) { "Исходящее соединение каскада изменено." }
                 removedOutbound = true
             } else {
                 require(!item.toString().contains(outboundTag)) { "Исходящее соединение каскада используется другими настройками." }
@@ -424,6 +424,7 @@ class PanelApi {
         val outbounds = template.optJSONArray("outbounds") ?: return@withContext CascadeProbe(CascadeProbeStatus.UNKNOWN)
         val outbound = (0 until outbounds.length()).mapNotNull { outbounds.optJSONObject(it) }
             .singleOrNull { it.optString("tag") == outboundTag } ?: return@withContext CascadeProbe(CascadeProbeStatus.UNKNOWN)
+        if (outbound.optString("protocol") in setOf("hysteria", "amneziawg")) return@withContext CascadeProbe(CascadeProbeStatus.UNKNOWN)
         val deadline = System.nanoTime() + 15_000L * 1_000_000
         val body = "outbound=" + encode(outbound.toString()) + "&mode=tcp"
         val result = request(validated, "panel/api/xray/testOutbound", deadline, 15_000, body, "application/x-www-form-urlencoded") as? JSONObject

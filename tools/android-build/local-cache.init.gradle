@@ -1,0 +1,19 @@
+gradle.settingsEvaluated { settings ->
+    def localMaven = new File(settings.settingsDir, 'tools/android-build/maven')
+    if (!localMaven.isDirectory()) {
+        throw new GradleException('Run tools/android-build/import-gradle-cache.py first')
+    }
+    [settings.pluginManagement.repositories, settings.dependencyResolutionManagement.repositories].each { repositories ->
+        def official = repositories.toList()
+        repositories.clear()
+        repositories.maven {
+            name = 'xBoardPersistentCache'
+            url = localMaven.toURI()
+            metadataSources {
+                gradleMetadata()
+                mavenPom()
+            }
+        }
+        official.each { repositories.add(it) }
+    }
+}

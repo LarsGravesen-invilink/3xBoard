@@ -4,6 +4,7 @@ import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -125,7 +126,7 @@ private fun SplashScreen(progress: Float) {
     val target = if (progress.isFinite()) progress.coerceIn(0f, 1f) else 0f
     val displayedProgress by animateFloatAsState(
         targetValue = target,
-        animationSpec = tween(300),
+        animationSpec = snap(),
         label = "splashProgress"
     )
     BoxWithConstraints(Modifier.fillMaxSize()) {

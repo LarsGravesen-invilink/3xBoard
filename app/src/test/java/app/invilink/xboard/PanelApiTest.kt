@@ -19,6 +19,7 @@ class PanelApiTest {
         assertEquals("panel.example", app.invilink.xboard.panels.panelDisplayName("DOMAIN", "203.0.113.4", "panel.example"))
         assertEquals("203.0.113.4", app.invilink.xboard.panels.panelDisplayName("domain", "203.0.113.4", null))
         assertEquals("Мой сервер", app.invilink.xboard.panels.panelDisplayName("Мой сервер", "203.0.113.4", "panel.example"))
+        assertEquals("", PanelValidation.validate(PanelConfig("id", "", "https://203.0.113.4/", "token")).name)
     }
     @Test fun clientTrafficUsesNumericStringsAndClientListOverridesStaleZero() {
         val inbound = app.invilink.xboard.panels.ManagementParser.inbounds(org.json.JSONArray().put(org.json.JSONObject()

@@ -1056,20 +1056,46 @@ private fun CascadeHomeCard(cascade: CascadeMetadata, panels: List<PanelSummary>
         }
         BlockDivider()
         val clientCount = inbound?.clients?.count { it.email != cascade.entryClientName }
+        val cascadeProtocol = when (cascade.protocol) {
+            app.invilink.xboard.panels.CascadeProtocol.HYSTERIA2 -> "HYSTERIA2" to inboundProtocolColor("hysteria")
+            app.invilink.xboard.panels.CascadeProtocol.AMNEZIAWG -> "AMNEZIAWG" to inboundProtocolColor("amneziawg")
+            app.invilink.xboard.panels.CascadeProtocol.VLESS_REALITY -> "VLESS + REALITY" to inboundProtocolColor("vless")
+        }
+        val cascadeInbound = inbound
+        val cascadeTransport = if (cascadeInbound != null) inboundTransport(cascadeInbound) else when (cascade.protocol) {
+            app.invilink.xboard.panels.CascadeProtocol.HYSTERIA2 -> "QUIC/UDP" to if (palette.isDark) Color(0xFFFFD54F) else Color(0xFFB17600)
+            app.invilink.xboard.panels.CascadeProtocol.AMNEZIAWG -> "UDP" to if (palette.isDark) Color(0xFFFFD54F) else Color(0xFFB17600)
+            app.invilink.xboard.panels.CascadeProtocol.VLESS_REALITY -> "—" to palette.secondary
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            MetricItem(MetricIcon.Users, clientCount?.toString() ?: "—", "Клиенты: ${clientCount ?: "—"}", Modifier.weight(0.65f), 14.sp)
+            MetricItem(MetricIcon.Users, clientCount?.toString() ?: "—", "Клиенты: ${clientCount ?: "—"}", Modifier.weight(1.3f), 14.sp)
+            HomeMetricDivider()
             TrafficMetric("↓", inbound?.down, "Получено, входящий трафик", Modifier.weight(1.35f), 14.sp)
+            HomeMetricDivider()
             TrafficMetric("↑", inbound?.up, "Отправлено, исходящий трафик", Modifier.weight(1.35f), 14.sp)
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-            val availability = availabilityText(cascadeAvailability)
-            Row(Modifier.weight(1.1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        val availability = availabilityText(cascadeAvailability)
+        val udpCascade = cascade.protocol in setOf(
+            app.invilink.xboard.panels.CascadeProtocol.HYSTERIA2,
+            app.invilink.xboard.panels.CascadeProtocol.AMNEZIAWG,
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1.35f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 AvailabilityDot(cascadeAvailability, availability)
                 Text(availability, color = palette.secondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text("API ${entry?.metrics?.latencyMillis?.let { "$it мс" } ?: "—"}", Modifier.weight(1f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
-            Text("↑ ${exit?.metrics?.latencyMillis?.let { "$it мс" } ?: "—"}", Modifier.weight(0.9f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
-            Text("↕ ${interNodeLatency?.let { "$it мс" } ?: "—"}", Modifier.weight(0.9f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
+            if (!udpCascade) {
+                HomeMetricDivider()
+                Text("API ${entry?.metrics?.latencyMillis?.let { "$it мс" } ?: "—"}", Modifier.weight(1f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
+                HomeMetricDivider()
+                Text("↑ ${exit?.metrics?.latencyMillis?.let { "$it мс" } ?: "—"}", Modifier.weight(0.9f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
+                HomeMetricDivider()
+                Text("↕ ${interNodeLatency?.let { "$it мс" } ?: "—"}", Modifier.weight(0.9f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
+            }
+        }
+        Row(Modifier.padding(start = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            HomeProtocolTag(cascadeProtocol.first, cascadeProtocol.second, "Протокол каскада: ${cascadeProtocol.first}")
+            HomeProtocolTag(cascadeTransport.first, cascadeTransport.second, "Транспорт каскада: ${cascadeTransport.first}")
         }
     }
 }
@@ -1086,7 +1112,7 @@ private fun CascadeDirectionIcon(cascadeId: String) {
         Color(0xFF99D5B9), Color(0xFFE0ADC9), Color(0xFFA9BCE1), Color(0xFFE1CD8D),
     )
     val background = backgrounds[cascadeIconColorIndex(cascadeId, backgrounds.size)]
-    Canvas(Modifier.size(30.dp).semantics { contentDescription = "Каскадное соединение" }) {
+    Canvas(Modifier.size(40.dp).semantics { contentDescription = "Каскадное соединение" }) {
         val u = size.minDimension / 30f
         drawRoundRect(background, cornerRadius = CornerRadius(7f * u))
         val stroke = 1.8f * u
@@ -1161,6 +1187,7 @@ private fun PanelCard(
         (item.exitPanelId == panel.id && (item.exitInboundId == row.id || item.exitInboundId == null && item.exitInboundName == row.name))
     } }
     val visibleRows = rows?.filterNot { it in hiddenRows.orEmpty() }
+    val activeProtocols = visibleRows?.filter { it.enabled }?.map { canonicalPanelProtocol(it.protocol) }?.distinct()?.sorted().orEmpty()
     val metrics = rawMetrics.copy(
         inboundCount = visibleRows?.size,
         clientCount = visibleRows?.flatMap { it.clients }?.map { it.email.lowercase(Locale.ROOT) }?.toSet()?.size,
@@ -1216,7 +1243,7 @@ private fun PanelCard(
     ) {
         val compact = maxHeight < 100.dp
         Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+            Modifier.fillMaxWidth().fillMaxHeight().verticalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp, vertical = if (compact) 6.dp else 8.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
@@ -1246,41 +1273,51 @@ private fun PanelCard(
                          modifier = Modifier.size(44.dp).semantics { contentDescription = "Настройки SSH-сервера ${panel.name}" },
                      ) { BoardIcon(BoardSymbol.Settings, palette.foreground, 20.dp) }
                  }
-                 val flag = panel.location?.countryFlag.orEmpty()
-                  Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                          if (flag.isNotEmpty()) Text(flag, fontSize = 26.sp, lineHeight = 30.sp, maxLines = 1)
-                          Text(
-                              if (panel.sshManaged) "SSH" else "API", color = palette.foreground, fontSize = 9.sp, lineHeight = 11.sp,
-                             fontWeight = FontWeight.Bold,
-                             modifier = Modifier.clip(RoundedCornerShape(5.dp)).background(palette.soft)
-                                 .padding(horizontal = 4.dp, vertical = 1.dp)
-                                  .semantics { contentDescription = if (panel.sshManaged) "Управляется по SSH" else "Подключена по API" },
-                          )
-                  }
+                   val flag = panel.location?.countryFlag.orEmpty()
+                   if (flag.isNotEmpty()) Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                       Text(flag, fontSize = 32.sp, lineHeight = 36.sp, maxLines = 1)
+                   }
               }
              BlockDivider()
-             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                MetricItem(MetricIcon.Inbound, metrics.inboundCount?.toString() ?: "—", "Инбаунды: ${metrics.inboundCount ?: "—"}", Modifier.weight(0.65f), if (compact) 12.sp else 14.sp)
-                MetricItem(MetricIcon.Users, metrics.clientCount?.toString() ?: "—", "Клиенты: ${metrics.clientCount ?: "—"}", Modifier.weight(0.65f), if (compact) 12.sp else 14.sp)
-                TrafficMetric("↓", metrics.downBytes, "Получено, входящий трафик", Modifier.weight(1.35f), if (compact) 12.sp else 14.sp)
-                TrafficMetric("↑", metrics.upBytes, "Отправлено, исходящий трафик", Modifier.weight(1.35f), if (compact) 12.sp else 14.sp)
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1.2f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    AvailabilityDot(metrics.availability, availability)
-                    Text(availability, color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                Text("API $latency", Modifier.weight(1.1f).semantics { contentDescription = "Время ответа API: $latency" },
-                    color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                 MetricItem(MetricIcon.Cpu, formatCpu(metrics.cpuPercent), "CPU: ${formatCpu(metrics.cpuPercent)}", Modifier.weight(0.8f), 11.sp)
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                 Row(Modifier.weight(1.3f)) {
+                     MetricItem(MetricIcon.Inbound, metrics.inboundCount?.toString() ?: "—", "Инбаунды: ${metrics.inboundCount ?: "—"}", Modifier.weight(1f), if (compact) 12.sp else 14.sp)
+                     MetricItem(MetricIcon.Users, metrics.clientCount?.toString() ?: "—", "Клиенты: ${metrics.clientCount ?: "—"}", Modifier.weight(1f), if (compact) 12.sp else 14.sp)
+                  }
+                  HomeMetricDivider()
+                  TrafficMetric("↓", metrics.downBytes, "Получено, входящий трафик", Modifier.weight(1.35f), if (compact) 12.sp else 14.sp)
+                  HomeMetricDivider()
+                 TrafficMetric("↑", metrics.upBytes, "Отправлено, исходящий трафик", Modifier.weight(1.35f), if (compact) 12.sp else 14.sp)
              }
-              Spacer(Modifier.height(if (compact) 2.dp else 8.dp))
-              val freeMemoryPercent = metrics.memoryUsedBytes?.let { used -> metrics.memoryTotalBytes?.takeIf { it > 0 }?.let { total ->
-                  ((total - used).coerceAtLeast(0).toDouble() * 100.0 / total).coerceIn(0.0, 100.0)
-              } }
-              Text("ОЗУ: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "—"}",
-                  modifier = Modifier.semantics { contentDescription = "Свободная оперативная память: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "не определена"}" },
-                  color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp)
+              Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                  Row(Modifier.weight(1.3f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                      AvailabilityDot(metrics.availability, availability)
+                      Text(availability, color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                   }
+                   HomeMetricDivider()
+                   Text("API $latency", Modifier.weight(1.35f).semantics { contentDescription = "Время ответа API: $latency" },
+                      color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                  HomeMetricDivider()
+                  MetricItem(MetricIcon.Cpu, formatCpu(metrics.cpuPercent), "CPU: ${formatCpu(metrics.cpuPercent)}", Modifier.weight(1.35f), 11.sp)
+              }
+               Spacer(Modifier.weight(1f, fill = false))
+               val freeMemoryPercent = metrics.memoryUsedBytes?.let { used -> metrics.memoryTotalBytes?.takeIf { it > 0 }?.let { total ->
+                   ((total - used).coerceAtLeast(0).toDouble() * 100.0 / total).coerceIn(0.0, 100.0)
+               } }
+                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                     Text("ОЗУ: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "—"}",
+                         modifier = Modifier.semantics { contentDescription = "Свободная оперативная память: ${freeMemoryPercent?.let { String.format(Locale.ROOT, "%.1f%%", it) } ?: "не определена"}" },
+                         color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp)
+                     Spacer(Modifier.weight(1f, fill = true))
+                     activeProtocols.forEach { protocol ->
+                         HomeProtocolTag(protocol.uppercase(), inboundProtocolColor(protocol), "Работающий протокол: ${protocol.uppercase()}")
+                     }
+                     Text(if (panel.sshManaged) "SSH" else "API", color = palette.foreground, fontSize = 11.sp, lineHeight = 14.sp,
+                         fontWeight = FontWeight.Bold,
+                         modifier = Modifier.clip(RoundedCornerShape(4.dp)).border(1.dp, palette.line, RoundedCornerShape(4.dp))
+                             .padding(horizontal = 6.dp, vertical = 2.dp)
+                             .semantics { contentDescription = if (panel.sshManaged) "Управляется по SSH" else "Подключена по API" })
+                 }
         }
     }
 }
@@ -1331,19 +1368,46 @@ internal fun rememberRefreshGlow(itemKey: Any, eventId: Long?, completedAt: Long
     }
 }
 
+private fun canonicalPanelProtocol(protocol: String): String = when (protocol.trim().lowercase(Locale.ROOT)) {
+    "hysteria", "hysteria2" -> "hysteria"
+    else -> protocol.trim().lowercase(Locale.ROOT)
+}
+
+@Composable
+private fun HomeProtocolTag(value: String, color: Color, description: String) {
+    val shape = RoundedCornerShape(4.dp)
+    Box(Modifier.border(1.dp, color.copy(alpha = 0.9f), shape)
+        .background(color.copy(alpha = if (LocalXBoardPalette.current.isDark) 0.18f else 0.14f), shape)
+        .padding(horizontal = 4.dp, vertical = 1.dp).semantics { contentDescription = description },
+        contentAlignment = Alignment.Center) {
+        Text(value, color = color, fontSize = 9.sp, lineHeight = 11.sp, fontWeight = FontWeight.Bold,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
 @Composable
 private fun TrafficMetric(arrow: String, bytes: Long?, label: String, modifier: Modifier, fontSize: TextUnit) {
     val palette = LocalXBoardPalette.current
     val value = formatTrafficBytes(bytes)
-    Row(
-        modifier.semantics { contentDescription = "$label: $value" },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        Text(arrow, color = palette.secondary, fontSize = fontSize, fontWeight = FontWeight.Bold)
-        Text(value, color = palette.foreground, fontSize = fontSize, lineHeight = fontSize * 1.25f,
-            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    BoxWithConstraints(modifier.semantics { contentDescription = "$label: $value" }) {
+        val available = maxWidth.value
+        val adaptiveSize = if (available.isFinite() && available > 0f) {
+            (available / (value.length.coerceAtLeast(1) * 0.62f + 1.4f)).coerceIn(8f, fontSize.value)
+        } else fontSize.value
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
+            Text(arrow, color = palette.secondary, fontSize = (adaptiveSize + 2f).sp, fontWeight = FontWeight.Bold)
+            Text(value, color = palette.foreground, fontSize = adaptiveSize.sp, lineHeight = adaptiveSize.sp * 1.25f,
+                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
+}
+
+@Composable
+private fun HomeMetricDivider() {
+    Box(Modifier.width(1.dp).height(18.dp).background(LocalXBoardPalette.current.line))
 }
 
 @Composable
@@ -1373,9 +1437,9 @@ private fun AvailabilityDot(availability: PanelAvailability, label: String, modi
     val palette = LocalXBoardPalette.current
     val color = when (availability) {
         PanelAvailability.UNKNOWN -> palette.secondary
-        PanelAvailability.ONLINE -> Color(0xFF5D9A48)
-        PanelAvailability.OFFLINE -> Color(0xFFC16A49)
-        PanelAvailability.UNAUTHORIZED -> Color(0xFFC18D3C)
+        PanelAvailability.ONLINE -> if (palette.isDark) Color(0xFF5D9A48) else Color(0xFF16833A)
+        PanelAvailability.OFFLINE -> if (palette.isDark) Color(0xFFC16A49) else Color(0xFFC62828)
+        PanelAvailability.UNAUTHORIZED -> if (palette.isDark) Color(0xFFC18D3C) else Color(0xFFA66A00)
     }
     Row(
         modifier = modifier.semantics { contentDescription = "Доступность: $label" },

@@ -46,6 +46,16 @@ object ConnectionGenerators {
 
     fun hysteriaPassword(): String = urlBase64(bytes(24))
 
+    fun amneziaWgKeyPair(): Map<String, String> {
+        val privateKey = X25519PrivateKeyParameters(random)
+        return mapOf(
+            "privateKey" to base64(privateKey.encoded),
+            "publicKey" to base64(privateKey.generatePublicKey().encoded),
+        )
+    }
+
+    fun amneziaWgPresharedKey(): String = base64(bytes(32))
+
     fun tag(): String = "inbound-${hex(8)}"
 
     fun canGenerateClientValue(inbound: InboundDetail, field: String): Boolean =

@@ -34,7 +34,8 @@ class CascadeServiceTest {
         assertEquals(row.toString(), cascadeCreatedInboundForDeletion(rows(row), 7, "cascade-entry", "cascade")!!.toString())
         assertNull(cascadeCreatedInboundForDeletion(rows(), 7, "cascade-entry", "cascade"))
         assertNull(cascadeCreatedInboundForDeletion(rows(), null, "cascade-entry", "cascade"))
-        assertThrows(IllegalArgumentException::class.java) { cascadeCreatedInboundForDeletion(rows(row), null, "cascade-entry", "cascade") }
+        assertEquals(row.toString(), cascadeCreatedInboundForDeletion(rows(row), null, "cascade-entry", "cascade")!!.toString())
+        assertThrows(IllegalArgumentException::class.java) { cascadeCreatedInboundForDeletion(rows(JSONObject(row.toString()).put("remark", "other")), null, "cascade-entry", "cascade") }
         assertThrows(IllegalArgumentException::class.java) { cascadeCreatedInboundForDeletion(rows(row), 8, "cascade-entry", "cascade") }
         assertThrows(IllegalArgumentException::class.java) { cascadeCreatedInboundForDeletion(rows(row), 7, "other", "cascade") }
         assertThrows(IllegalArgumentException::class.java) { cascadeCreatedInboundForDeletion(rows(row), 7, "cascade-entry", "renamed") }
@@ -66,6 +67,66 @@ class CascadeServiceTest {
             assertEquals(0, JSONObject(payload.getString("settings")).getJSONArray("clients").length())
             if (network == "xhttp") assertEquals("/wizard", stream.getJSONObject("xhttpSettings").getString("path"))
         }
+    }
+
+    @Test fun hysteriaCascadePayloadUsesLiteralIpCertificateDirectoryAndMatchesExitTransport() {
+        val service = CascadeService(Gateway(), Journal())
+        val exit = service.hysteriaInbound("Exit", "cascade-exit", 443, "exit.example.com", "ip", "h3")
+        val exitStream = JSONObject(exit.payload().getString("streamSettings"))
+        val certificate = exitStream.getJSONObject("tlsSettings").getJSONArray("certificates").getJSONObject(0)
+        assertEquals("/root/cert/ip/fullchain.pem", certificate.getString("certificateFile"))
+        assertEquals("/root/cert/ip/privkey.pem", certificate.getString("keyFile"))
+        val outbound = service.hysteriaOutbound("cascade-out", "203.0.113.2", 443,
+            "exit.example.com", "h3", "technical-auth", exit)
+        assertEquals("hysteria", outbound.getString("protocol"))
+        assertEquals("technical-auth", outbound.getJSONObject("streamSettings").getJSONObject("hysteriaSettings").getString("auth"))
+        val tls = outbound.getJSONObject("streamSettings").getJSONObject("tlsSettings")
+        assertFalse(tls.has("certificates"))
+        assertEquals("exit.example.com", tls.getString("serverName"))
+        assertEquals("h3", tls.getJSONArray("alpn").getString(0))
+        assertEquals(exitStream.getJSONObject("finalmask").toString(),
+            outbound.getJSONObject("streamSettings").getJSONObject("finalmask").toString())
+    }
+
+    @Test fun hysteriaCascadePayloadUsesDomainCertificateDirectory() {
+        val service = CascadeService(Gateway(), Journal())
+        val draft = service.hysteriaInbound("Entry", "cascade-entry", 443, "entry.example.com", "entry.example.com", "h3")
+        val certificate = JSONObject(draft.payload().getString("streamSettings")).getJSONObject("tlsSettings")
+            .getJSONArray("certificates").getJSONObject(0)
+        assertEquals("/root/cert/entry.example.com/fullchain.pem", certificate.getString("certificateFile"))
+        assertEquals("/root/cert/entry.example.com/privkey.pem", certificate.getString("keyFile"))
+    }
+
+    @Test fun hysteriaCascadeAcceptsIpSniAndExplicitCertificatePaths() {
+        val service = CascadeService(Gateway(), Journal())
+        val draft = service.hysteriaInbound("Entry", "cascade-entry", 443, "198.51.100.10", "ip", "h3",
+            "/etc/custom/certificate.pem", "/etc/custom/key.pem")
+        val tls = JSONObject(draft.payload().getString("streamSettings")).getJSONObject("tlsSettings")
+        assertEquals("198.51.100.10", tls.getString("serverName"))
+        val certificate = tls.getJSONArray("certificates").getJSONObject(0)
+        assertEquals("/etc/custom/certificate.pem", certificate.getString("certificateFile"))
+        assertEquals("/etc/custom/key.pem", certificate.getString("keyFile"))
+    }
+
+    @Test fun hysteriaUdpPortCandidatesAreRandomHighPorts() {
+        val ports = hysteriaUdpPortCandidates()
+        assertTrue(ports.size >= 90)
+        assertEquals(ports.size, ports.toSet().size)
+        assertTrue(ports.all { it in 20_000..45_000 })
+    }
+
+    @Test fun amneziaWgCascadeClientVerificationAllowsNormalizedNoncriticalFields() {
+        val inbound = JSONObject("""{"protocol":"amneziawg","settings":{"clients":[{"email":"technical","publicKey":"public","preSharedKey":"psk","enable":true,"allowedIPs":["10.0.0.2/32"],"keepAlive":25}]}}""")
+        val expected = JSONObject("""{"email":"technical","publicKey":"public","preSharedKey":"psk","enable":true,"allowedIPs":["0.0.0.0/0"],"keepAlive":"25"}""")
+        assertTrue(cascadeInboundClientMatches(inbound, expected))
+        assertFalse(cascadeInboundClientMatches(inbound, expected.put("preSharedKey", "other")))
+    }
+
+    @Test fun hysteriaCascadeClientVerificationChecksAuth() {
+        val inbound = JSONObject("""{"settings":{"clients":[{"email":"technical","auth":"expected","enable":true}]}}""")
+        val expected = JSONObject("""{"email":"technical","auth":"expected","enable":true}""")
+        assertTrue(cascadeInboundClientMatches(inbound, expected))
+        assertFalse(cascadeInboundClientMatches(inbound, expected.put("auth", "wrong")))
     }
 
     @Test fun existingTagReferencesFailClosed() {
@@ -360,6 +421,52 @@ class CascadeServiceTest {
     private fun request() = CascadeRequest("test-id", "entry", "exit", 443, 8443,
         "exit.example.test", "entry.example.test", "exit.example.test", entryName = ":DE:", exitName = ":US:", allowXrayRestart = true)
 
+    @Test fun amneziaWgCascadeCreatesPeerAndOutbound() = runBlocking {
+        val gateway = Gateway()
+        val result = CascadeService(gateway, Journal()).create(request().copy(
+            protocol = CascadeProtocol.AMNEZIAWG,
+            awgMtu = 1280,
+            awgPrimaryDns = "8.8.8.8",
+            awgSecondaryDns = "1.1.1.1",
+        ))
+        assertEquals(CascadeProtocol.AMNEZIAWG, result.protocol)
+        assertEquals("amneziawg", gateway.entry!!.protocol)
+        assertEquals("amneziawg", gateway.exit!!.protocol)
+        assertTrue(gateway.exitClient!!.values.getValue("email").startsWith("hide "))
+        val outbound = JSONObject(gateway.outbound)
+        assertEquals("amneziawg", outbound.getString("protocol"))
+        val settings = outbound.getJSONObject("settings")
+        assertEquals("8.8.8.8", settings.getString("dns"))
+        assertEquals("exit.example.test:8443", settings.getJSONArray("peers").getJSONObject(0).getString("endpoint"))
+        assertEquals(JSONObject(gateway.exit!!.protocolSettings).getJSONObject("server").getString("publicKey"),
+            settings.getJSONArray("peers").getJSONObject(0).getString("publicKey"))
+    }
+
+    @Test fun hysteriaCascadeWorkflowCreatesIsolatedInboundsAndJournalsTechnicalAuth() = runBlocking {
+        val gateway = Gateway()
+        val result = CascadeService(gateway, Journal()).create(request().copy(
+            protocol = CascadeProtocol.HYSTERIA2,
+            entryCertificateTarget = "ip",
+            exitCertificateTarget = "exit.example.test",
+        ))
+        assertEquals(CascadeProtocol.HYSTERIA2, result.protocol)
+        assertTrue(result.technicalAuth!!.isNotBlank())
+        assertEquals("hysteria", gateway.entry!!.protocol)
+        assertEquals("hysteria", gateway.exit!!.protocol)
+        fun detail(draft: InboundDraft): InboundDetail {
+            val payload = draft.payload()
+            val stream = JSONObject(payload.getString("streamSettings"))
+            return InboundDetail(1, payload.getString("remark"), payload.getString("protocol"), payload.getInt("port"), true,
+                stream.getString("network"), stream.getString("security"), null, null, null, null, emptyList(), payload.getString("settings"))
+        }
+        assertEquals(1L, gateway.entryClient!!.payload(detail(gateway.entry!!)).getLong("trafficResetDay"))
+        assertEquals(1L, gateway.exitClient!!.payload(detail(gateway.exit!!)).getLong("trafficResetDay"))
+        assertTrue(gateway.exitClient!!.values.getValue("email").startsWith("hide "))
+        assertEquals(result.technicalAuth, gateway.exitClient!!.values.getValue("auth"))
+        assertEquals(result.technicalAuth,
+            JSONObject(gateway.outbound).getJSONObject("streamSettings").getJSONObject("hysteriaSettings").getString("auth"))
+    }
+
     private class Journal : CascadeJournal {
         val history = mutableListOf<CascadeMetadata>()
         var reserved = false
@@ -411,6 +518,8 @@ class CascadeServiceTest {
             call("capture:$panelId")
             return checkNotNull(if (panelId == "entry") entry else exit).payload().put("id", inboundId).toString()
         }
+        override suspend fun readInbound(panelId: String, inboundId: Long): InboundDraft =
+            checkNotNull(if (panelId == "entry") entry else exit)
         override suspend fun createInbound(panelId: String, draft: InboundDraft): Long {
             call("inbound:$panelId")
             if (panelId == "entry") entry = draft else exit = draft

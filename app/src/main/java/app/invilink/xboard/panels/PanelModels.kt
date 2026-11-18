@@ -124,8 +124,9 @@ internal object PanelValidation {
     fun validate(config: PanelConfig): PanelConfig {
         require(config.id.isNotBlank() && config.id.length <= 128 &&
             config.id.none { it.isISOControl() }) { "Некорректный идентификатор панели." }
-        require(config.name.isNotBlank() && config.name.length <= 128 &&
-            config.name.none { it.isISOControl() }) { "Имя панели должно содержать от 1 до 128 символов." }
+        require(config.name.length <= 128 && config.name.none { it.isISOControl() }) {
+            "Имя панели должно содержать не более 128 символов без управляющих символов."
+        }
         require(config.token.isNotEmpty() && config.token.length <= 8192 &&
             config.token.all { it in '!'..'~' }) { "Токен должен содержать от 1 до 8192 печатных ASCII-символов без пробелов и переносов строк." }
         return config.copy(baseUrl = normalizeBaseUrl(config.baseUrl))

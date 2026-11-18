@@ -23,6 +23,7 @@ import app.invilink.xboard.panels.CascadeSyncProgress
 import app.invilink.xboard.panels.CascadeSyncException
 import app.invilink.xboard.panels.CascadeStep
 import app.invilink.xboard.panels.CascadeTransport
+import app.invilink.xboard.panels.CascadeProtocol
 import app.invilink.xboard.panels.CascadeMetadata
 import app.invilink.xboard.panels.CascadeHealth
 import app.invilink.xboard.panels.CascadeProbe
@@ -38,6 +39,7 @@ import app.invilink.xboard.panels.PanelSyncScheduler
 import app.invilink.xboard.panels.OfflinePanelStoreException
 import app.invilink.xboard.panels.ConnectivityObserver
 import app.invilink.xboard.panels.PanelMetrics
+import app.invilink.xboard.panels.panelDisplayName
 import app.invilink.xboard.panels.visiblePanelInbounds
 import app.invilink.xboard.panels.PanelAvailability
 import app.invilink.xboard.panels.generateClientValues
@@ -61,6 +63,7 @@ import app.invilink.xboard.security.SessionGuard
 import app.invilink.xboard.security.SessionIdleDeadline
 import app.invilink.xboard.ui.PanelFormMemory
 import app.invilink.xboard.ui.PanelRefreshResult
+import app.invilink.xboard.ssh.SslMode
 import app.invilink.xboard.ui.InboundRefreshResult
 import app.invilink.xboard.ui.ScreenModel
 import app.invilink.xboard.ui.Stage
@@ -109,7 +112,12 @@ internal data class CascadeForm(
     val entryPort: String = "", val exitPort: String = "", val address: String = "",
     val entrySni: String = InboundDraft().sniChoices().first(),
     val exitSni: String = InboundDraft().sniChoices().first(),
-    val transport: CascadeTransport = CascadeTransport.TCP, val fingerprint: String = "chrome",
+    val transport: CascadeTransport = CascadeTransport.TCP, val protocol: CascadeProtocol = CascadeProtocol.VLESS_REALITY,
+    val fingerprint: String = "chrome", val hysteriaAlpn: String = "h3",
+    val entryUsePanelCertificate: Boolean = true, val exitUsePanelCertificate: Boolean = true,
+    val entryCertificateFile: String = "", val entryKeyFile: String = "",
+    val exitCertificateFile: String = "", val exitKeyFile: String = "",
+    val awgMtu: String = "1280", val awgPrimaryDns: String = "8.8.8.8", val awgSecondaryDns: String = "1.1.1.1",
     val entryName: String = "", val exitName: String = "",
     val allowRestart: Boolean = false,
     val entrySuggestion: String? = null, val exitSuggestion: String? = null,
@@ -395,26 +403,72 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         return true
     }
 
+    private fun certificateDirectoryTarget(panelId: String?): String {
+        val installed = serverManager.state.value.servers.firstOrNull { it.panelId == panelId }
+        if (installed != null) return when (installed.sslMode) {
+            SslMode.IP -> "ip"
+            SslMode.DOMAIN -> installed.certificateTarget.trim()
+        }
+        val host = panelConfigs.firstOrNull { it.id == panelId }?.baseUrl?.let { baseUrl ->
+            runCatching { URI(baseUrl).host?.removeSurrounding("[", "]") }.getOrNull()
+        }.orEmpty()
+        return host.takeIf { it.any(Char::isLetter) } ?: "ip"
+    }
+
+    private fun cascadePanelServerName(panelId: String): String {
+        val installed = serverManager.state.value.servers.firstOrNull { it.panelId == panelId }
+        if (installed?.sslMode == SslMode.DOMAIN) return installed.certificateTarget.trim()
+        return panelConfigs.firstOrNull { it.id == panelId }?.baseUrl?.let { baseUrl ->
+            runCatching { URI(baseUrl).host?.removeSurrounding("[", "]") }.getOrNull()
+        }.orEmpty()
+    }
+
+    internal fun selectCascadeProtocol(protocol: CascadeProtocol) {
+        if (mutableCascade.value.busy || mutableCascade.value.metadata != null) return
+        updateCascadeForm { form ->
+            val entrySni = if (protocol == CascadeProtocol.HYSTERIA2 && form.entry.isNotBlank()) cascadePanelServerName(form.entry) else form.entrySni
+            val exitSni = if (protocol == CascadeProtocol.HYSTERIA2 && form.exit.isNotBlank()) cascadePanelServerName(form.exit) else form.exitSni
+            form.copy(protocol = protocol, entrySni = entrySni, exitSni = exitSni)
+        }
+        val updated = mutableCascade.value.form
+        mutableState.value.panels.firstOrNull { it.id == updated.entry }?.let { selectCascadePanel(true, it, resetPortEdited = false) }
+        mutableState.value.panels.firstOrNull { it.id == updated.exit }?.let { selectCascadePanel(false, it, resetPortEdited = false) }
+    }
+
     internal fun cascadeRequest(): CascadeRequest {
         val form = mutableCascade.value.form
         return CascadeRequest(
             id = UUID.randomUUID().toString(), entryPanelId = form.entry, exitPanelId = form.exit,
             entryPort = requireNotNull(form.entryPort.toIntOrNull()),
             exitPort = requireNotNull(form.exitPort.toIntOrNull()),
-            exitAddress = form.address.trim(), entryServerName = form.entrySni, exitServerName = form.entrySni,
-            transport = form.transport, fingerprint = form.fingerprint, entryName = form.entryName.trim(),
+            exitAddress = form.address.trim(), entryServerName = form.entrySni, exitServerName = form.exitSni,
+            transport = form.transport, protocol = form.protocol, fingerprint = form.fingerprint,
+            entryCertificateTarget = certificateDirectoryTarget(form.entry),
+            exitCertificateTarget = certificateDirectoryTarget(form.exit), hysteriaAlpn = form.hysteriaAlpn.trim(),
+            entryCertificateFile = if (form.entryUsePanelCertificate) "" else form.entryCertificateFile.trim(),
+            entryKeyFile = if (form.entryUsePanelCertificate) "" else form.entryKeyFile.trim(),
+            exitCertificateFile = if (form.exitUsePanelCertificate) "" else form.exitCertificateFile.trim(),
+            exitKeyFile = if (form.exitUsePanelCertificate) "" else form.exitKeyFile.trim(),
+            awgMtu = requireNotNull(form.awgMtu.toIntOrNull()), awgPrimaryDns = form.awgPrimaryDns.trim(),
+            awgSecondaryDns = form.awgSecondaryDns.trim(),
+            entryName = form.entryName.trim(),
             exitName = form.exitName.trim(), allowXrayRestart = form.allowRestart,
             hideEntry = form.hideEntry && mutableState.value.unlockAllEnabled,
             hideExit = form.hideExit && mutableState.value.unlockAllEnabled,
         )
     }
 
-    internal fun selectCascadePanel(entry: Boolean, panel: PanelSummary) {
+    internal fun selectCascadePanel(entry: Boolean, panel: PanelSummary, resetPortEdited: Boolean = true) {
         if (mutableCascade.value.busy || mutableCascade.value.metadata != null) return
         val name = listOfNotNull(panel.location?.countryFlag?.takeIf { it.isNotBlank() },
             panel.name.ifBlank { "cascade" }).joinToString(" ").take(90)
-        updateCascadeForm { form -> if (entry) form.copy(entry = panel.id, entryName = name, entryPort = "", entrySuggestion = null, entryLoading = true, entryPortEdited = false, entryInbound = null)
-            else form.copy(exit = panel.id, exitName = name, exitPort = "", exitSuggestion = null, exitLoading = true, exitPortEdited = false, exitInbound = null) }
+        val sni = if (mutableCascade.value.form.protocol == CascadeProtocol.HYSTERIA2) cascadePanelServerName(panel.id) else null
+        updateCascadeForm { form -> if (entry) form.copy(entry = panel.id, entryName = name, entrySni = sni ?: form.entrySni,
+            entryPort = if (resetPortEdited) "" else form.entryPort, entrySuggestion = null, entryLoading = true,
+            entryPortEdited = if (resetPortEdited) false else form.entryPortEdited, entryInbound = null)
+            else form.copy(exit = panel.id, exitName = name, exitSni = sni ?: form.exitSni,
+                exitPort = if (resetPortEdited) "" else form.exitPort, exitSuggestion = null, exitLoading = true,
+                exitPortEdited = if (resetPortEdited) false else form.exitPortEdited, exitInbound = null) }
         if (entry) entryPortJob?.cancel() else exitPortJob?.cancel()
         val job = viewModelScope.launch {
             try {
@@ -423,9 +477,13 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                     check(sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) { "Сессия закрыта или сеть недоступна." }
                     panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == id }) { "Панель не найдена." } }
                 })
-                val candidates = listOf(1443, 2443, 3443, 4443, 5443, 6443, 7443, 8443, 9443) + (10000..10100).toList()
-                val port = CascadeService(gateway, cascadeJournal).suggestedPorts(panel.id, candidates).firstOrNull()
-                val message = if (port == null) "Свободный порт среди предложенных не найден." else "Порт $port не занят инбаундом панели; доступность системы и firewall не проверены."
+                val service = CascadeService(gateway, cascadeJournal)
+                val udp = mutableCascade.value.form.protocol in setOf(CascadeProtocol.HYSTERIA2, CascadeProtocol.AMNEZIAWG)
+                val port = if (udp) service.suggestedHysteriaUdpPorts(panel.id).firstOrNull()
+                    else service.suggestedPorts(panel.id, listOf(1443, 2443, 3443, 4443, 5443, 6443, 7443, 8443, 9443) + (10000..10100).toList()).firstOrNull()
+                val message = if (port == null) "Свободный порт среди предложенных не найден." else if (udp)
+                    "UDP-порт $port не занят UDP-инбаундом панели; firewall и внешняя UDP-доступность не проверены."
+                else "Порт $port не занят инбаундом панели; доступность системы и firewall не проверены."
                 mutableCascade.update { state ->
                     val f = state.form
                     if (entry && f.entry == panel.id) state.copy(form = f.copy(entryPort = if (!f.entryPortEdited) port?.toString().orEmpty() else f.entryPort, entrySuggestion = message, entryLoading = false))
@@ -610,7 +668,9 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 val failures = mutableListOf<String>()
                 cascadeRecoveryLock.withLock {
                     check(recoveryJournal.load() == null) { "Сначала проверьте и подтвердите журнал восстановления синхронизации." }
-                    check(!stored.inFlight) { "Результат незавершённой операции неизвестен; проверьте панели вручную." }
+                    check(!stored.inFlight || stored.step in setOf(CascadeStep.ENTRY_INBOUND, CascadeStep.ENTRY_CLIENT) && stored.entryInboundCreated) {
+                        "Незавершённая операция находится после безопасного этапа очистки; проверьте панели вручную."
+                    }
                     failures.addAll(app.invilink.xboard.panels.cleanupCascadeSides { isEntry ->
                         gateway.cleanupSide(stored, entry = isEntry, exit = !isEntry)
                     })
@@ -795,7 +855,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 delay(32)
             }
             mutableState.update { it.copy(splashProgress = 1f) }
-            delay(350L)
+            delay(16L)
             loaded.fold(
                 onSuccess = { result ->
                     configured = result.exists
@@ -1331,11 +1391,19 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         panelConfigMutex.withLock {
             check(panelConfigs.any { it.id == panelId })
             val next = panelConfigs.map { if (it.id == panelId) it.copy(name = name) else it }
-            withContext(Dispatchers.IO) { panelStore.save(next) }
+            withContext(Dispatchers.IO) {
+                panelStore.save(next)
+                preferences.edit().putBoolean("auto_name_$panelId", false).commit()
+            }
             panelConfigs = next
             mutableState.update { state -> state.copy(
                 panels = state.panels.map { if (it.id == panelId) it.copy(name = name) else it },
-                activePanelName = if (state.activePanelId == panelId) name else state.activePanelName,
+                activePanelName = if (state.activePanelId == panelId) {
+                    val config = next.first { it.id == panelId }
+                    val host = runCatching { URI(config.baseUrl).host?.removeSurrounding("[", "]") }.getOrNull()
+                    val domain = host?.takeIf { value -> !value.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) && ':' !in value }
+                    panelDisplayName(name, state.panels.firstOrNull { it.id == panelId }?.location?.ipAddress ?: host, domain)
+                } else state.activePanelName,
             ) }
         }
     }
@@ -1577,8 +1645,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
             mutableState.update { it.copy(panelError = failure.message ?: "Проверьте адрес и порт панели.") }
             return
         }
-        val fallbackName = URI(baseUrl).host.removeSurrounding("[", "]")
-        val config = PanelConfig(id, current.addName.trim().ifBlank { fallbackName }, baseUrl, current.addToken)
+        val config = PanelConfig(id, current.addName.trim(), baseUrl, current.addToken)
         if (savedPanelDraft == config) {
             completePanelSave()
             return
@@ -1588,11 +1655,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         panelSaveJob = viewModelScope.launch {
             try {
                 val detectedLocation = if (connectivity.online.value) locationResolver.resolve(config.baseUrl) else null
-                val autoName = detectedLocation?.let { location ->
-                    val country = Locale("", location.countryCode).getDisplayCountry(Locale("ru")).ifBlank { location.countryName }
-                    listOfNotNull(country, location.city).joinToString(" · ").take(128)
-                }
-                val namedConfig = if (current.addName.isBlank() && autoName != null) config.copy(name = autoName) else config
+                val namedConfig = config
                 val canVerify = panelConnectionAllowed(namedConfig)
                 val checked = withContext(Dispatchers.IO) {
                     if (canVerify) {
@@ -1610,7 +1673,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                     } else existing + checked.first
                     withContext(Dispatchers.IO) {
                         panelStore.save(updated)
-                        preferences.edit().putBoolean("auto_name_$id", current.addName.isBlank())
+                        preferences.edit().putBoolean("auto_name_$id", false)
                             .putBoolean("unverified_$id", !canVerify).commit()
                     }
                     panelConfigs = updated
@@ -1936,7 +1999,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 val location = locationResolver.resolve(config.baseUrl)
                 if (panelConfigs.any { it.id == config.id && it.baseUrl == config.baseUrl }) {
                     var named = config
-                    if (location != null && preferences.getBoolean("auto_name_${config.id}", false)) {
+                    if (location != null && config.name.isNotBlank() && preferences.getBoolean("auto_name_${config.id}", false)) {
                         val country = Locale("", location.countryCode).getDisplayCountry(Locale("ru")).ifBlank { location.countryName }
                         val name = listOfNotNull(country, location.city).joinToString(" · ").take(128)
                         if (name != config.name) {
@@ -1956,7 +2019,11 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                     mutableState.update { state ->
                         state.copy(
                             panels = state.panels.map { if (it.id == config.id) it.copy(name = actual.name, location = location ?: it.location) else it },
-                            activePanelName = if (state.activePanelId == config.id) actual.name else state.activePanelName,
+                            activePanelName = if (state.activePanelId == config.id) {
+                                val host = runCatching { URI(actual.baseUrl).host?.removeSurrounding("[", "]") }.getOrNull()
+                                val domain = host?.takeIf { value -> !value.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) && ':' !in value }
+                                panelDisplayName(actual.name, (location ?: state.panels.firstOrNull { it.id == config.id }?.location)?.ipAddress ?: host, domain)
+                            } else state.activePanelName,
                         )
                     }
                     try {
@@ -1981,10 +2048,14 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         if (blockStealthOperation()) return false
         if (!foreground) return false
         val config = panelConfigs.firstOrNull { it.id == id } ?: return false
+        val host = runCatching { URI(config.baseUrl).host?.removeSurrounding("[", "]") }.getOrNull()
+        val summary = mutableState.value.panels.firstOrNull { it.id == id }
+        val domain = host?.takeIf { value -> !value.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) && ':' !in value }
+        val displayName = panelDisplayName(config.name, summary?.location?.ipAddress ?: host, domain)
         linksJob?.cancel()
         detailJob?.cancel()
         mutableState.update {
-            it.copy(stage = Stage.PANEL_DETAIL, activePanelId = id, activePanelName = config.name,
+            it.copy(stage = Stage.PANEL_DETAIL, activePanelId = id, activePanelName = displayName,
                 activePanelAddress = config.baseUrl, inbounds = emptyList(), expandedInbounds = emptySet(), inboundRefreshResult = null,
                 selectedClient = null, detailsError = null, notice = null, onlineClientEmails = null, clientActionError = null, trafficResetNoticeId = null)
         }
@@ -2187,21 +2258,22 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         try {
             mutableState.update { state ->
                 var draft = if (key == "hysteria:panelCertificates") state.inboundDraft else state.inboundDraft.update(key, value)
+                val certificateTarget = certificateDirectoryTarget(state.activePanelId)
                 val host = panelConfigs.firstOrNull { it.id == state.activePanelId }?.baseUrl?.let { baseUrl ->
                     runCatching { URI(baseUrl).host?.removeSurrounding("[", "]") }.getOrNull()
                 }.orEmpty()
                 if ((key == "protocol" && value == "hysteria") || key == "hysteria:panelCertificates") {
                     require(draft.protocol == "hysteria") { "Сертификаты панели доступны только для Hysteria2." }
                     if (host.isNotBlank()) draft = draft.update("tls:serverName", host)
-                        .update("tls:certificateFile", "/root/cert/$host/fullchain.pem")
-                        .update("tls:keyFile", "/root/cert/$host/privkey.pem")
-                } else if (draft.protocol == "hysteria" && value.isBlank() && host.isNotBlank()) {
+                    draft = draft.update("tls:certificateFile", "/root/cert/$certificateTarget/fullchain.pem")
+                        .update("tls:keyFile", "/root/cert/$certificateTarget/privkey.pem")
+                } else if (draft.protocol == "hysteria" && value.isBlank()) {
                     draft = when (key) {
-                        "tls:serverName" -> draft.update(key, host)
-                        "tls:certificateFile" -> draft.update(key, "/root/cert/$host/fullchain.pem")
-                        "tls:keyFile" -> draft.update(key, "/root/cert/$host/privkey.pem")
-                        "hysteria:cert:0:certificateFile" -> draft.update(key, "/root/cert/$host/fullchain.pem")
-                        "hysteria:cert:0:keyFile" -> draft.update(key, "/root/cert/$host/privkey.pem")
+                        "tls:serverName" -> if (host.isNotBlank()) draft.update(key, host) else draft
+                        "tls:certificateFile" -> draft.update(key, "/root/cert/$certificateTarget/fullchain.pem")
+                        "tls:keyFile" -> draft.update(key, "/root/cert/$certificateTarget/privkey.pem")
+                        "hysteria:cert:0:certificateFile" -> draft.update(key, "/root/cert/$certificateTarget/fullchain.pem")
+                        "hysteria:cert:0:keyFile" -> draft.update(key, "/root/cert/$certificateTarget/privkey.pem")
                         "tls:alpn" -> draft.update(key, "h3")
                         "tls:minVersion" -> draft.update(key, "1.2")
                         "tls:maxVersion" -> draft.update(key, "1.3")
@@ -3035,7 +3107,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
     )
 
     private companion object {
-        const val SPLASH_MILLIS = 3_000L
+        const val SPLASH_MILLIS = 1_000L
         const val SESSION_GRACE_MILLIS = 900_000L
         const val PANEL_REFRESH_MILLIS = 10_000L
     }

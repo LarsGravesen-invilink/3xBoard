@@ -8,6 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.Locale
+import java.security.SecureRandom
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -30,9 +31,21 @@ internal data class CascadeRequest(
     val exitInboundId: Long? = null,
     val hideEntry: Boolean = false,
     val hideExit: Boolean = false,
+    val protocol: CascadeProtocol = CascadeProtocol.VLESS_REALITY,
+    val entryCertificateTarget: String = "ip",
+    val exitCertificateTarget: String = "ip",
+    val hysteriaAlpn: String = "h3",
+    val entryCertificateFile: String = "",
+    val entryKeyFile: String = "",
+    val exitCertificateFile: String = "",
+    val exitKeyFile: String = "",
+    val awgMtu: Int = 1280,
+    val awgPrimaryDns: String = "8.8.8.8",
+    val awgSecondaryDns: String = "1.1.1.1",
 )
 
 internal enum class CascadeTransport { TCP, XHTTP }
+internal enum class CascadeProtocol { VLESS_REALITY, HYSTERIA2, AMNEZIAWG }
 
 internal enum class CascadeStep { ENTRY_INBOUND, ENTRY_CLIENT, EXIT_INBOUND, EXIT_CLIENT, ROUTING, RESTART_EXIT, RESTART_ENTRY, VERIFY, COMPLETE }
 
@@ -66,6 +79,8 @@ internal data class CascadeMetadata(
     val exitInboundSnapshot: String? = null,
     val entryExpectedSnapshot: String? = null,
     val exitExpectedSnapshot: String? = null,
+    val protocol: CascadeProtocol = CascadeProtocol.VLESS_REALITY,
+    val technicalAuth: String? = null,
 ) {
     override fun toString(): String = "CascadeMetadata(id=$id, step=$step, inFlight=$inFlight, snapshots=[REDACTED])"
 }
@@ -276,7 +291,9 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
             if (obj.isNull("entryInboundSnapshot")) null else text("entryInboundSnapshot"),
             if (obj.isNull("exitInboundSnapshot")) null else text("exitInboundSnapshot"),
             if (obj.isNull("entryExpectedSnapshot")) null else text("entryExpectedSnapshot"),
-            if (obj.isNull("exitExpectedSnapshot")) null else text("exitExpectedSnapshot"))
+            if (obj.isNull("exitExpectedSnapshot")) null else text("exitExpectedSnapshot"),
+            if (obj.has("protocol")) CascadeProtocol.valueOf(text("protocol")) else CascadeProtocol.VLESS_REALITY,
+            if (obj.isNull("technicalAuth")) null else text("technicalAuth"))
         require(metadata.id == id)
         validate(metadata)
         return metadata
@@ -295,7 +312,9 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
             .put("entryInboundSnapshot", m.entryInboundSnapshot ?: JSONObject.NULL)
             .put("exitInboundSnapshot", m.exitInboundSnapshot ?: JSONObject.NULL)
             .put("entryExpectedSnapshot", m.entryExpectedSnapshot ?: JSONObject.NULL)
-            .put("exitExpectedSnapshot", m.exitExpectedSnapshot ?: JSONObject.NULL).toString()
+            .put("exitExpectedSnapshot", m.exitExpectedSnapshot ?: JSONObject.NULL)
+            .put("protocol", m.protocol.name)
+            .put("technicalAuth", m.technicalAuth ?: JSONObject.NULL).toString()
         require(raw.length <= 262144) { "Снимок инбаунда слишком велик для журнала." }
         check(preferences.edit().putString(m.id, raw).commit()) { "Не удалось сохранить журнал каскадов." }
         check(read(m.id) == m) { "Не удалось подтвердить запись журнала каскадов." }
@@ -320,6 +339,8 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
         require(m.exitInboundId == null || m.exitInboundId > 0)
         require(m.step != CascadeStep.COMPLETE || !m.inFlight)
         require(m.step == CascadeStep.COMPLETE || m.result == CascadeResult.UNKNOWN)
+        require(m.protocol != CascadeProtocol.HYSTERIA2 || !m.technicalAuth.isNullOrBlank())
+        require(m.technicalAuth == null || (m.technicalAuth.length <= 512 && m.technicalAuth.none(Char::isISOControl)))
     }
 
     private fun validId(id: String) = id.matches(Regex("[A-Za-z0-9_-]{1,48}"))
@@ -337,12 +358,14 @@ internal interface CascadePanelGateway {
     suspend fun preflight(request: CascadeRequest) { error("Предварительная проверка не поддерживается.") }
     suspend fun occupiedNames(panelId: String): CascadeOccupiedNames = error("Проверка имён не поддерживается.")
     suspend fun suggestedPorts(panelId: String, candidates: List<Int>): List<Int> = error("Проверка портов не поддерживается.")
+    suspend fun suggestedUdpPorts(panelId: String, candidates: List<Int>): List<Int> = suggestedPorts(panelId, candidates)
     /** Read-only inspection; the returned snapshot must be journaled before any mutation. */
     suspend fun snapshotExistingInbound(panelId: String, inboundId: Long, port: Int): String =
         error("Проверка существующего инбаунда не поддерживается.")
     suspend fun updateExistingInbound(panelId: String, snapshot: String, draft: InboundDraft): Long =
         error("Обновление существующего инбаунда не поддерживается.")
     suspend fun captureInbound(panelId: String, inboundId: Long, draft: InboundDraft, client: ClientDraft): String = error("Снимок состояния не поддерживается.")
+    suspend fun readInbound(panelId: String, inboundId: Long): InboundDraft = error("Чтение инбаунда не поддерживается.")
     suspend fun restartAndCheck(panelId: String) { error("Проверка перезапуска не поддерживается.") }
     /** Re-read both panels after restarting; throw unless the requested configuration is present. */
     suspend fun verifyConfiguration(request: CascadeRequest, metadata: CascadeMetadata,
@@ -356,6 +379,10 @@ internal interface CascadePanelGateway {
     suspend fun createClient(panelId: String, inboundId: Long, client: ClientDraft)
     suspend fun installRouting(panelId: String, inboundTag: String, outboundTag: String, outbound: String)
 }
+
+internal fun cascadeInboundUsesUdp(inbound: InboundDetail): Boolean = inbound.protocol.lowercase() in setOf(
+    "hysteria", "hysteria2", "tuic", "wireguard", "amneziawg", "shadowsocks"
+) || inbound.network.lowercase() in setOf("hysteria", "quic", "kcp")
 
 /** Resolves credentials on demand; callers must explicitly construct and invoke this gateway. */
 internal class PanelApiCascadeGateway(
@@ -372,7 +399,10 @@ internal class PanelApiCascadeGateway(
         for ((panel, port, selectedId) in listOf(Triple(entry, request.entryPort, request.entryInboundId), Triple(exit, request.exitPort, request.exitInboundId))) {
             check(api.isXrayRunning(panel)) { "Xray не работает на одной из панелей." }
             val rows = api.inbounds(panel)
-            require(rows.none { it.port == port && it.id != selectedId }) { "Порт уже используется другим инбаундом." }
+            require(rows.none { it.port == port && it.id != selectedId &&
+                (request.protocol != CascadeProtocol.HYSTERIA2 || cascadeInboundUsesUdp(it)) }) {
+                "Порт уже используется инбаундом с тем же транспортом."
+            }
         }
         val template = JSONObject(api.xrayRouting(entry).template)
         require(template.optJSONArray("outbounds") != null) { "Формат конфигурации Xray не поддерживается." }
@@ -455,10 +485,19 @@ internal class PanelApiCascadeGateway(
         return row.toString()
     }
 
+    override suspend fun readInbound(panelId: String, inboundId: Long): InboundDraft =
+        InboundDraft.fromRaw(api.offlineInbound(config(panelId), inboundId).toString())
+
     override suspend fun suggestedPorts(panelId: String, candidates: List<Int>): List<Int> {
         require(candidates.size <= 1024 && candidates.all { it in 1..65535 })
         val used = api.inbounds(config(panelId)).map { it.port }.toSet()
         return candidates.distinct().filterNot { it in used }
+    }
+
+    override suspend fun suggestedUdpPorts(panelId: String, candidates: List<Int>): List<Int> {
+        require(candidates.size <= 1024 && candidates.all { it in 1..65535 })
+        val usedUdp = api.inbounds(config(panelId)).filter(::cascadeInboundUsesUdp).map { it.port }.toSet()
+        return candidates.distinct().filterNot { it in usedUdp }
     }
 
     override suspend fun restartAndCheck(panelId: String) {
@@ -484,14 +523,23 @@ internal class PanelApiCascadeGateway(
             val actual = api.offlineInbound(panel, id)
             val expectedSettings = JSONObject(expected.getString("settings"))
             expectedSettings.remove("clients")
+            val awgConfirmed = if (draft.protocol == "amneziawg") {
+                val server = JSONObject(actual.getString("settings")).optJSONObject("server")
+                server != null && server.optString("subnetIp").isNotBlank() && server.optInt("subnetCidr") in 1..32 &&
+                    server.optInt("mtu") in 1..65535 && server.optString("privateKey").isNotBlank() && server.optString("publicKey").isNotBlank()
+            } else false
+            if (draft.protocol == "amneziawg") expectedSettings.optJSONObject("server")?.apply {
+                remove("privateKey")
+                remove("publicKey")
+            }
             check(actual.optString("tag") == expected.getString("tag") &&
                 actual.optString("remark") == expected.getString("remark") &&
                 actual.optInt("port") == expected.getInt("port") &&
                 actual.optString("protocol") == expected.getString("protocol") &&
                 actual.optBoolean("enable") == expected.getBoolean("enable") &&
-                containsJson(JSONObject(actual.getString("settings")), expectedSettings) &&
-                containsJson(JSONObject(actual.getString("streamSettings")), JSONObject(expected.getString("streamSettings"))) &&
-                containsJson(JSONObject(actual.getString("sniffing")), JSONObject(expected.getString("sniffing")))) {
+                (awgConfirmed || containsJson(JSONObject(actual.getString("settings")), expectedSettings) &&
+                    containsJson(JSONObject(actual.getString("streamSettings")), JSONObject(expected.getString("streamSettings"))) &&
+                    containsJson(JSONObject(actual.getString("sniffing")), JSONObject(expected.getString("sniffing"))))) {
                 "Инбаунд изменился после перезапуска."
             }
             val inbound = api.inbounds(panel).single { it.id == id }
@@ -515,7 +563,18 @@ internal class PanelApiCascadeGateway(
     override suspend fun cleanup(metadata: CascadeMetadata) = cleanupSide(metadata, entry = true, exit = true)
 
     internal suspend fun cleanupSide(metadata: CascadeMetadata, entry: Boolean, exit: Boolean) {
-        check(!metadata.inFlight) { "Результат незавершённого запроса неизвестен; автоматическая очистка запрещена. Проверьте панели вручную." }
+        if (metadata.inFlight) {
+            if (!entry) return
+            require(metadata.step in setOf(CascadeStep.ENTRY_INBOUND, CascadeStep.ENTRY_CLIENT) && metadata.entryInboundCreated) {
+                "Незавершённая операция находится после безопасного этапа очистки; проверьте панели вручную."
+            }
+            val panel = config(metadata.entryPanelId)
+            val rows = api.offlineSnapshot(panel).first
+            val row = cascadeCreatedInboundForDeletion(rows, metadata.entryInboundId, metadata.entryTag, metadata.entryInboundName) ?: return
+            api.offlineDelete(panel, row.getLong("id"), null)
+            check(api.inbounds(panel).none { it.id == row.getLong("id") }) { "Удаление неподтверждённого инбаунда не подтверждено." }
+            return
+        }
         // Existing inbounds are restored only when their current configuration still matches
         // the post-creation snapshot. Old journals deliberately fail closed.
         suspend fun restore(panelId: String, id: Long?, original: String?, expected: String?, managedName: String) {
@@ -617,7 +676,8 @@ internal class PanelApiCascadeGateway(
         val expected = draft.payload()
         val tag = expected.getString("tag")
         val before = api.inbounds(panel)
-        require(before.none { nameKey(it.name) == nameKey(draft.name) || it.port == expected.getInt("port") }) {
+        require(before.none { nameKey(it.name) == nameKey(draft.name) ||
+            (it.port == expected.getInt("port") && (draft.protocol != "hysteria" || cascadeInboundUsesUdp(it))) }) {
             "Имя или порт инбаунда уже используются."
         }
         api.saveInbound(panel, draft)
@@ -626,12 +686,22 @@ internal class PanelApiCascadeGateway(
         val id = candidates.single().id
         check(before.none { it.id == id }) { "Панель вернула существующий инбаунд." }
         val actual = api.offlineInbound(panel, id)
+        val awgConfirmed = if (draft.protocol == "amneziawg") {
+            val server = runCatching { JSONObject(actual.getString("settings")).optJSONObject("server") }.getOrNull()
+            server != null && server.optString("subnetIp").isNotBlank() && server.optInt("subnetCidr") in 1..32 &&
+                server.optInt("mtu") in 1..65535 && server.optString("privateKey").isNotBlank() && server.optString("publicKey").isNotBlank()
+        } else false
+        val expectedSettings = JSONObject(expected.getString("settings"))
+        if (draft.protocol == "amneziawg") expectedSettings.optJSONObject("server")?.apply {
+            remove("privateKey")
+            remove("publicKey")
+        }
         check(actual.optString("tag") == tag && actual.optString("remark") == draft.name &&
             actual.optInt("port") == expected.getInt("port") && actual.optString("protocol") == expected.getString("protocol") &&
             actual.optBoolean("enable") == expected.getBoolean("enable") &&
-            containsJson(JSONObject(actual.getString("settings")), JSONObject(expected.getString("settings"))) &&
-            containsJson(JSONObject(actual.getString("streamSettings")), JSONObject(expected.getString("streamSettings"))) &&
-            containsJson(JSONObject(actual.getString("sniffing")), JSONObject(expected.getString("sniffing")))) {
+            (awgConfirmed || containsJson(JSONObject(actual.getString("settings")), expectedSettings) &&
+                containsJson(JSONObject(actual.getString("streamSettings")), JSONObject(expected.getString("streamSettings"))) &&
+                containsJson(JSONObject(actual.getString("sniffing")), JSONObject(expected.getString("sniffing"))))) {
             "Настройки созданного инбаунда не подтверждены."
         }
         return id
@@ -690,8 +760,13 @@ internal fun cascadeCreatedInboundForDeletion(rows: JSONArray, id: Long?, tag: S
     require(tag.isNotBlank() && name.isNotBlank()) { "Владение инбаундом не подтверждено; журнал сохранён." }
     val all = (0 until rows.length()).map { rows.optJSONObject(it) ?: error("Некорректный список инбаундов; журнал сохранён.") }
     if (id == null) {
-        require(all.none { it.optString("tag") == tag }) { "ID созданного инбаунда неизвестен; журнал сохранён." }
-        return null
+        val matches = all.filter { it.optString("tag") == tag }
+        require(matches.size <= 1) { "Тег созданного инбаунда неоднозначен; журнал сохранён." }
+        val row = matches.singleOrNull() ?: return null
+        require(row.optLong("id") > 0 && row.optString("tag") == tag && row.optString("remark") == name) {
+            "Владение инбаундом не подтверждено или инбаунд изменён; журнал сохранён."
+        }
+        return row
     }
     require(id > 0) { "Некорректный ID инбаунда; журнал сохранён." }
     val matches = all.filter { it.optString("tag") == tag || it.optLong("id") == id }
@@ -779,11 +854,23 @@ internal fun cascadeInboundClientMatches(inbound: JSONObject, expected: JSONObje
         .filter { it.optString("email") == email }
     if (matching.size != 1) return false
     val actual = matching.single()
-    return actual.optString("id") == expected.optString("id") &&
+    if (inbound.optString("protocol") == "amneziawg") {
+        val expectedPsk = expected.optString("preSharedKey")
+        val actualPsk = actual.optString("preSharedKey").ifBlank { actual.optString("presharedKey") }
+        return actual.opt("enable") is Boolean && expected.opt("enable") is Boolean &&
+            actual.getBoolean("enable") == expected.getBoolean("enable") &&
+            actual.optString("publicKey") == expected.optString("publicKey") &&
+            expectedPsk.isNotBlank() && actualPsk == expectedPsk
+    }
+    val coreMatches = actual.optString("id") == expected.optString("id") &&
         actual.optString("subId") == expected.optString("subId") &&
         actual.optString("flow") == expected.optString("flow") &&
         actual.opt("enable") is Boolean && expected.opt("enable") is Boolean &&
         actual.getBoolean("enable") == expected.getBoolean("enable")
+    val sensitiveMatches = listOf("auth", "publicKey", "preSharedKey", "allowedIPs", "keepAlive").all { key ->
+        !expected.has(key) || actual.has(key) && containsJson(actual.opt(key), expected.opt(key))
+    }
+    return coreMatches && sensitiveMatches
 }
 
 internal fun cascadeRoutingMatches(template: JSONObject, inboundTag: String, outboundTag: String, expectedOutbound: JSONObject): Boolean {
@@ -1201,12 +1288,21 @@ internal suspend fun cleanupCascadeSides(cleanup: suspend (Boolean) -> Unit): Li
     return failures
 }
 
+internal fun hysteriaUdpPortCandidates(random: SecureRandom = SecureRandom()): List<Int> {
+    val ports = LinkedHashSet<Int>()
+    repeat(96) { ports += 20_000 + random.nextInt(25_001) }
+    return ports.toList()
+}
+
 /** Orchestrates changes only through injected dependencies; it performs no network operations itself. */
 internal class CascadeService(private val gateway: CascadePanelGateway, private val journal: CascadeJournal) {
     suspend fun suggestedPorts(panelId: String, candidates: List<Int>): List<Int> = gateway.suggestedPorts(panelId, candidates)
+    suspend fun suggestedHysteriaUdpPorts(panelId: String): List<Int> = gateway.suggestedUdpPorts(panelId, hysteriaUdpPortCandidates())
 
     suspend fun remove(metadata: CascadeMetadata) {
-        check(!metadata.inFlight) { "Результат незавершённого запроса неизвестен; автоматическая очистка запрещена. Проверьте панели вручную." }
+        check(!metadata.inFlight || metadata.step in setOf(CascadeStep.ENTRY_INBOUND, CascadeStep.ENTRY_CLIENT) && metadata.entryInboundCreated) {
+            "Результат незавершённой операции неизвестен; автоматическая очистка запрещена. Проверьте панели вручную."
+        }
         check(metadata.entryInboundId != null || metadata.step == CascadeStep.ENTRY_INBOUND) { "ID входного инбаунда неизвестен; журнал сохранён." }
         check(metadata.exitInboundId != null || metadata.step.ordinal < CascadeStep.EXIT_INBOUND.ordinal) { "ID выходного инбаунда неизвестен; журнал сохранён." }
         check((metadata.entryInboundCreated || metadata.entryInboundId == null || metadata.entryExpectedSnapshot != null) &&
@@ -1221,16 +1317,36 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
         require(request.entryInboundId == null || request.entryInboundId > 0)
         require(request.exitInboundId == null || request.exitInboundId > 0)
         require(request.allowXrayRestart) { "Для создания требуется явное разрешение на перезапуск Xray обеих панелей." }
-        require(request.fingerprint in InboundDraft.fingerprints && request.fingerprint.isNotBlank() &&
-            request.fingerprint != "unsafe") { "Неподдерживаемый fingerprint." }
+        require(request.protocol != CascadeProtocol.VLESS_REALITY ||
+            request.fingerprint in InboundDraft.fingerprints && request.fingerprint.isNotBlank() && request.fingerprint != "unsafe") {
+            "Неподдерживаемый fingerprint."
+        }
+        require(request.protocol != CascadeProtocol.HYSTERIA2 || request.hysteriaAlpn.trim().matches(Regex("[A-Za-z0-9._-]{1,64}"))) {
+            "Некорректный ALPN Hysteria2."
+        }
+        if (request.protocol == CascadeProtocol.HYSTERIA2) {
+            hysteriaCertificatePaths(request.entryCertificateTarget, request.entryCertificateFile, request.entryKeyFile)
+            hysteriaCertificatePaths(request.exitCertificateTarget, request.exitCertificateFile, request.exitKeyFile)
+        }
         requireNotNull(cascadeFlag(request.entryName)) { "Укажите флаг страны входа." }
         requireNotNull(cascadeFlag(request.exitName)) { "Укажите флаг страны выхода." }
         require(request.id.matches(Regex("[A-Za-z0-9_-]{1,48}"))) { "Некорректный ID каскада." }
         require(request.entryPanelId.isNotBlank() && request.exitPanelId.isNotBlank() && request.entryPanelId != request.exitPanelId) { "Выберите две разные панели." }
         require(request.entryPort in 1..65535 && request.exitPort in 1..65535) { "Некорректный порт." }
         require(request.exitAddress.isNotBlank() && request.exitAddress.none { it.isWhitespace() || it.isISOControl() || it in "/?#@" }) { "Некорректный адрес второй панели." }
-        InboundDraft.normalizeSni(request.entryServerName.trim())
-        InboundDraft.normalizeSni(request.exitServerName.trim())
+        if (request.protocol == CascadeProtocol.HYSTERIA2) {
+            normalizeHysteriaServerName(request.entryServerName)
+            normalizeHysteriaServerName(request.exitServerName)
+        } else if (request.protocol == CascadeProtocol.VLESS_REALITY) {
+            InboundDraft.normalizeSni(request.entryServerName.trim())
+            InboundDraft.normalizeSni(request.exitServerName.trim())
+        }
+        if (request.protocol == CascadeProtocol.AMNEZIAWG) {
+            require(request.awgMtu in 576..65535) { "MTU AmneziaWG должен быть от 576 до 65535." }
+            require(listOf(request.awgPrimaryDns, request.awgSecondaryDns).all { it.matches(Regex("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}")) }) {
+                "DNS AmneziaWG должен быть IPv4-адресом."
+            }
+        }
         require(request.entryInboundId == null && request.exitInboundId == null) { "Перезапись существующих инбаундов отключена." }
         gateway.preflight(request)
         val existing = journal.entries()
@@ -1264,8 +1380,6 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
         val outboundTag = "cascade-out-$suffix"
         val entryName = names.entryClient
         val exitName = names.exitClient
-        val network = if (request.transport == CascadeTransport.TCP) "tcp" else "xhttp"
-        val path = "/cascade-$suffix"
         fun target(snapshot: String?, generated: InboundDraft, tag: String): InboundDraft {
             if (snapshot == null) return generated
             val baseline = InboundDraft.fromRaw(snapshot)
@@ -1273,29 +1387,68 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
                 protocolSettings = generated.protocolSettings, streamSettings = generated.streamSettings,
                 sniffing = generated.sniffing, sniMode = "preserve").update("tag", tag).also { it.payload() }
         }
-        val entry = target(entrySnapshot, realityInbound(names.entryInbound, entryTag, request.entryPort, request.entryServerName, network, path, request.fingerprint), entryTag)
-        val exit = target(exitSnapshot, realityInbound(names.exitInbound, exitTag, request.exitPort, request.exitServerName, network, path, request.fingerprint), exitTag)
-        val entryClient = realityClient(entryName, request.transport)
-        val exitClient = realityClient(exitName, request.transport)
-        val reality = JSONObject(exit.streamSettings).getJSONObject("realitySettings")
-        val user = JSONObject().put("id", exitClient.values.getValue("id")).put("encryption", "none")
-        if (request.transport == CascadeTransport.TCP) user.put("flow", "xtls-rprx-vision")
-        val stream = JSONObject().put("network", network).put("security", "reality")
-            .put("realitySettings", JSONObject().put("serverName", reality.getJSONArray("serverNames").getString(0))
-                .put("fingerprint", request.fingerprint).put("publicKey", reality.getJSONObject("settings").getString("publicKey"))
-                .put("shortId", reality.getJSONArray("shortIds").getString(0)).put("spiderX", "/"))
-        if (request.transport == CascadeTransport.XHTTP) stream.put("xhttpSettings", JSONObject().put("path", path).put("mode", "auto"))
-        val outbound = JSONObject().put("tag", outboundTag).put("protocol", "vless")
-            .put("settings", JSONObject().put("vnext", JSONArray().put(JSONObject()
-                .put("address", request.exitAddress).put("port", request.exitPort)
-                .put("users", JSONArray().put(user)))))
-            .put("streamSettings", stream)
+        val setup = when (request.protocol) {
+            CascadeProtocol.VLESS_REALITY -> {
+                val network = if (request.transport == CascadeTransport.TCP) "tcp" else "xhttp"
+                val path = "/cascade-$suffix"
+                val entry = target(entrySnapshot, realityInbound(names.entryInbound, entryTag, request.entryPort, request.entryServerName, network, path, request.fingerprint), entryTag)
+                val exit = target(exitSnapshot, realityInbound(names.exitInbound, exitTag, request.exitPort, request.exitServerName, network, path, request.fingerprint), exitTag)
+                val entryClient = realityClient(entryName, request.transport)
+                val exitClient = realityClient(exitName, request.transport)
+                val reality = JSONObject(exit.streamSettings).getJSONObject("realitySettings")
+                val user = JSONObject().put("id", exitClient.values.getValue("id")).put("encryption", "none")
+                if (request.transport == CascadeTransport.TCP) user.put("flow", "xtls-rprx-vision")
+                val stream = JSONObject().put("network", network).put("security", "reality")
+                    .put("realitySettings", JSONObject().put("serverName", reality.getJSONArray("serverNames").getString(0))
+                        .put("fingerprint", request.fingerprint).put("publicKey", reality.getJSONObject("settings").getString("publicKey"))
+                        .put("shortId", reality.getJSONArray("shortIds").getString(0)).put("spiderX", "/"))
+                if (request.transport == CascadeTransport.XHTTP) stream.put("xhttpSettings", JSONObject().put("path", path).put("mode", "auto"))
+                val outbound = JSONObject().put("tag", outboundTag).put("protocol", "vless")
+                    .put("settings", JSONObject().put("vnext", JSONArray().put(JSONObject()
+                        .put("address", request.exitAddress).put("port", request.exitPort)
+                        .put("users", JSONArray().put(user)))))
+                    .put("streamSettings", stream)
+                CascadeConfiguration(entry, entryClient, exit, exitClient, outbound,
+                    if (request.transport == CascadeTransport.XHTTP) CascadeCompatibility.XHTTP_UNVERIFIED else CascadeCompatibility.NOT_APPLICABLE)
+            }
+            CascadeProtocol.HYSTERIA2 -> {
+                val entry = hysteriaInbound(names.entryInbound, entryTag, request.entryPort, request.entryServerName,
+                    request.entryCertificateTarget, request.hysteriaAlpn, request.entryCertificateFile, request.entryKeyFile)
+                val exit = hysteriaInbound(names.exitInbound, exitTag, request.exitPort, request.exitServerName,
+                    request.exitCertificateTarget, request.hysteriaAlpn, request.exitCertificateFile, request.exitKeyFile)
+                val entryClient = hysteriaClient(entryName, ConnectionGenerators.hysteriaPassword())
+                val exitClient = hysteriaClient("hide $exitName", ConnectionGenerators.hysteriaPassword())
+                CascadeConfiguration(entry, entryClient, exit, exitClient,
+                    hysteriaOutbound(outboundTag, request.exitAddress, request.exitPort, request.exitServerName,
+                        request.hysteriaAlpn, exitClient.values.getValue("auth"), exit), CascadeCompatibility.NOT_APPLICABLE)
+            }
+            CascadeProtocol.AMNEZIAWG -> {
+                val subnets = awgSubnets(suffix)
+                val entry = awgInbound(names.entryInbound, entryTag, request.entryPort, subnets.first, request)
+                val exit = awgInbound(names.exitInbound, exitTag, request.exitPort, subnets.second, request)
+                val entryPair = ConnectionGenerators.amneziaWgKeyPair()
+                val entryClient = awgClient(entryName, entryPair, ConnectionGenerators.amneziaWgPresharedKey(), awgPeerAddress(subnets.first))
+                val linkPair = ConnectionGenerators.amneziaWgKeyPair()
+                val linkPsk = ConnectionGenerators.amneziaWgPresharedKey()
+                val exitClient = awgClient("hide $exitName", linkPair, linkPsk, awgPeerAddress(subnets.second))
+                CascadeConfiguration(entry, entryClient, exit, exitClient,
+                    awgOutbound(outboundTag, request.exitAddress, request.exitPort, linkPair, linkPsk, awgPeerAddress(subnets.second), exit),
+                    CascadeCompatibility.NOT_APPLICABLE)
+            }
+        }
+        val entry = setup.entry
+        val exit = setup.exit
+        val entryClient = setup.entryClient
+        val exitClient = setup.exitClient
+        var outbound = setup.outbound
         var metadata = CascadeMetadata(request.id, request.entryPanelId, request.exitPanelId, entryTag, exitTag,
-            outboundTag, entryName, exitName, CascadeStep.ENTRY_INBOUND,
-            compatibility = if (request.transport == CascadeTransport.XHTTP) CascadeCompatibility.XHTTP_UNVERIFIED else CascadeCompatibility.NOT_APPLICABLE,
+            outboundTag, entryClient.values.getValue("email"), exitClient.values.getValue("email"), CascadeStep.ENTRY_INBOUND,
+            compatibility = setup.compatibility,
             entryInboundName = entry.name, exitInboundName = exit.name, createdAt = System.currentTimeMillis(),
             entryInboundCreated = entrySnapshot == null, exitInboundCreated = exitSnapshot == null,
-            entryInboundSnapshot = entrySnapshot, exitInboundSnapshot = exitSnapshot)
+            entryInboundSnapshot = entrySnapshot, exitInboundSnapshot = exitSnapshot,
+            protocol = request.protocol,
+            technicalAuth = if (request.protocol == CascadeProtocol.HYSTERIA2) exitClient.values.getValue("auth") else null)
         check(journal.reserve(metadata)) { "ID или имя каскада уже занято; обновите журнал и повторите попытку." }
         try {
             suspend fun begin(step: CascadeStep) {
@@ -1326,6 +1479,13 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
             gateway.createClient(request.exitPanelId, exitId, exitClient)
             if (exitSnapshot != null) metadata = metadata.copy(exitExpectedSnapshot = gateway.captureInbound(request.exitPanelId, exitId, exit, exitClient))
             done()
+            if (request.protocol == CascadeProtocol.AMNEZIAWG) {
+                val provisional = outbound.getJSONObject("settings")
+                val peer = provisional.getJSONArray("peers").getJSONObject(0)
+                outbound = awgOutbound(outboundTag, request.exitAddress, request.exitPort,
+                    mapOf("privateKey" to provisional.getString("secretKey")), peer.optString("presharedKey"),
+                    provisional.getJSONArray("address").getString(0), gateway.readInbound(request.exitPanelId, exitId))
+            }
             begin(CascadeStep.ROUTING)
             gateway.installRouting(request.entryPanelId, entryTag, outboundTag, outbound.toString())
             done()
@@ -1354,6 +1514,151 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
             val guidance = "Автоматическая очистка не завершена: ${rollback.exceptionOrNull()?.message.orEmpty()}. Проверьте панели и журнал вручную."
             throw IllegalStateException("Ошибка на этапе ${metadata.step}: ${failure.message.orEmpty()}. $guidance", failure)
         }
+    }
+
+    private data class CascadeConfiguration(
+        val entry: InboundDraft,
+        val entryClient: ClientDraft,
+        val exit: InboundDraft,
+        val exitClient: ClientDraft,
+        val outbound: JSONObject,
+        val compatibility: CascadeCompatibility,
+    )
+
+    private fun certificateDirectoryTarget(value: String): String {
+        val target = value.trim()
+        require(target == "ip" || runCatching { InboundDraft.normalizeSni(target) }.isSuccess) {
+            "Некорректный каталог сертификата Hysteria2."
+        }
+        return target
+    }
+
+    private fun hysteriaCertificatePaths(target: String, certificateFile: String, keyFile: String): Pair<String, String> {
+        val certificate = certificateFile.trim()
+        val key = keyFile.trim()
+        if (certificate.isBlank() && key.isBlank()) {
+            val directory = certificateDirectoryTarget(target)
+            return "/root/cert/$directory/fullchain.pem" to "/root/cert/$directory/privkey.pem"
+        }
+        require(certificate.isNotBlank() && key.isNotBlank() && certificate.length <= 4096 && key.length <= 4096 &&
+            certificate.startsWith('/') && key.startsWith('/') &&
+            certificate.none { it.isISOControl() } && key.none { it.isISOControl() }) {
+            "Для Hysteria2 укажите абсолютные пути certificate и key без управляющих символов."
+        }
+        return certificate to key
+    }
+
+    private fun normalizeHysteriaServerName(value: String): String {
+        val candidate = value.trim()
+        return runCatching { InboundDraft.normalizeSni(candidate) }.getOrElse {
+            require(candidate.matches(Regex("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}")) &&
+                candidate.split('.').all { it.toInt() <= 255 }) { "SNI Hysteria2: укажите домен или IPv4-адрес." }
+            candidate
+        }
+    }
+
+    internal fun hysteriaInbound(name: String, tag: String, port: Int, serverName: String,
+        certificateTarget: String, alpn: String, certificateFile: String = "", keyFile: String = ""): InboundDraft {
+        val certificates = hysteriaCertificatePaths(certificateTarget, certificateFile, keyFile)
+        return InboundDraft(name = name, port = port.toString()).update("protocol", "hysteria")
+            .update("name", name).update("port", port.toString()).update("tag", tag)
+            .update("tls:serverName", normalizeHysteriaServerName(serverName))
+            .update("tls:alpn", alpn.trim())
+            .update("tls:certificateFile", certificates.first)
+            .update("tls:keyFile", certificates.second)
+            .prepareForSave()
+    }
+
+    private fun hysteriaClient(name: String, auth: String): ClientDraft = ClientDraft(mapOf(
+        "email" to name,
+        "auth" to auth,
+        "subId" to UUID.randomUUID().toString().replace("-", ""),
+        "trafficGiB" to "0",
+        "expiryTime" to "0",
+        "limitIp" to "0",
+        "limitHwid" to "0",
+        "tgId" to "0",
+        "reset" to "0",
+        "resetDay" to "0",
+        "resetWeekday" to "0",
+        "resetMax" to "0",
+        "trafficReset" to "never",
+        "trafficResetDay" to "1",
+    ))
+
+    internal fun hysteriaOutbound(tag: String, address: String, port: Int, serverName: String,
+        alpn: String, auth: String, exit: InboundDraft): JSONObject {
+        require(auth.isNotBlank()) { "Пароль авторизации Hysteria2 отсутствует." }
+        val stream = JSONObject(exit.streamSettings)
+        val tls = stream.getJSONObject("tlsSettings")
+        tls.remove("certificates")
+        tls.put("serverName", normalizeHysteriaServerName(serverName))
+        tls.put("alpn", JSONArray().put(alpn.trim()))
+        stream.getJSONObject("hysteriaSettings").put("auth", auth)
+        return JSONObject().put("tag", tag).put("protocol", "hysteria")
+            .put("settings", JSONObject().put("address", address).put("port", port).put("version", 2))
+            .put("streamSettings", stream)
+    }
+
+    private fun awgSubnets(seed: String): Pair<String, String> {
+        val value = seed.hashCode().toUInt().toLong()
+        val second = 16 + (value % 16).toInt()
+        val third = ((value shr 8) % 250).toInt() + 1
+        val otherThird = if (third == 250) 249 else third + 1
+        return "172.$second.$third.0" to "172.$second.$otherThird.0"
+    }
+
+    private fun awgPeerAddress(subnet: String): String = subnet.removeSuffix(".0") + ".2/32"
+
+    private fun awgInbound(name: String, tag: String, port: Int, subnet: String, request: CascadeRequest): InboundDraft {
+        val serverPair = ConnectionGenerators.amneziaWgKeyPair()
+        var draft = InboundDraft(name = name, port = port.toString()).update("protocol", "amneziawg")
+            .update("name", name).update("port", port.toString()).update("tag", tag)
+            .update("awg:subnetIp", subnet).update("awg:subnetCidr", "24")
+            .update("awg:mtu", request.awgMtu.toString())
+            .update("awg:primaryDns", request.awgPrimaryDns).update("awg:secondaryDns", request.awgSecondaryDns)
+        val settings = JSONObject(draft.protocolSettings)
+        settings.getJSONObject("server").put("privateKey", serverPair.getValue("privateKey")).put("publicKey", serverPair.getValue("publicKey"))
+        draft = draft.copy(protocolSettings = settings.toString())
+        return draft.prepareForSave()
+    }
+
+    private fun awgClient(name: String, pair: Map<String, String>, presharedKey: String, allowedIp: String): ClientDraft = ClientDraft(mapOf(
+        "email" to name,
+        "privateKey" to pair.getValue("privateKey"),
+        "publicKey" to pair.getValue("publicKey"),
+        "preSharedKey" to presharedKey,
+        "allowedIPs" to allowedIp,
+        "keepAlive" to "25",
+        "subId" to UUID.randomUUID().toString().replace("-", ""),
+        "trafficGiB" to "0", "expiryTime" to "0", "limitIp" to "0", "limitHwid" to "0", "tgId" to "0",
+        "reset" to "0", "resetDay" to "0", "resetWeekday" to "0", "resetMax" to "0",
+        "trafficReset" to "never", "trafficResetDay" to "1",
+    ))
+
+    private fun awgEndpoint(address: String, port: Int): String {
+        val host = address.trim().removeSurrounding("[", "]")
+        return if (host.contains(':')) "[$host]:$port" else "$host:$port"
+    }
+
+    private fun awgOutbound(tag: String, address: String, port: Int, pair: Map<String, String>, presharedKey: String,
+        tunnelAddress: String, exit: InboundDraft): JSONObject {
+        val server = JSONObject(exit.protocolSettings).getJSONObject("server")
+        val settings = JSONObject()
+            .put("mtu", server.getInt("mtu"))
+            .put("secretKey", pair.getValue("privateKey"))
+            .put("address", JSONArray().put(tunnelAddress))
+            .put("dns", server.getString("primaryDns"))
+            .put("peers", JSONArray().put(JSONObject()
+                .put("publicKey", server.getString("publicKey"))
+                .put("presharedKey", presharedKey)
+                .put("allowedIPs", JSONArray().put("0.0.0.0/0"))
+                .put("endpoint", awgEndpoint(address, port))
+                .put("keepAlive", 25)))
+        listOf("jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5",
+            "headerProtectionKey", "contentPaddingAddition", "rekeyAfterTime", "rekeyTimeout", "rejectAfterTime", "keepaliveTimeout", "maxHandshakeAttempts",
+            "randomTrailers", "disableCookies").forEach { key -> if (server.has(key)) settings.put(key, server.get(key)) }
+        return JSONObject().put("tag", tag).put("protocol", "amneziawg").put("settings", settings)
     }
 
     internal fun realityInbound(name: String, tag: String, port: Int, serverName: String, network: String, path: String, fingerprint: String): InboundDraft {
