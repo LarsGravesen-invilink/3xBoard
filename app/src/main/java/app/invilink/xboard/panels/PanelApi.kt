@@ -521,7 +521,7 @@ class PanelApi {
             val settings = request(validated, "panel/api/setting/all", deadline, 5_000, method = "POST") as? JSONObject ?: incompatible()
             val subscription = subscriptionUrl(validated, settings, client.subId)
             ClientLinks(connections, listOfNotNull(subscription),
-                warning = if (subscription == null) "Сервер подписок отключён или адрес не настроен в 3x-UI." else if (connectionFailure != null) "Ключ подключения недоступен. Ссылка подписки получена отдельно." else null)
+                warning = if (subscription == null) "Сервер подписок отключён или адрес не настроен в 3x-ui." else if (connectionFailure != null) "Ключ подключения недоступен. Ссылка подписки получена отдельно." else null)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {

@@ -6,6 +6,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -161,21 +163,35 @@ private fun CascadeNodeCard(
         modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp),
         color = palette.soft, border = BorderStroke(1.dp, palette.line),
     ) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 12.dp)) {
+            Column(Modifier.fillMaxWidth().padding(end = 48.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 val country = panel?.location?.let {
                     Locale("", it.countryCode).getDisplayCountry(Locale("ru")).ifBlank { it.countryName }
                 }?.takeIf { it.isNotBlank() }
                 val realIp = panel?.location?.ipAddress ?: panel?.displayAddress
                 val customName = panel?.name?.trim().orEmpty().takeIf { it.isNotEmpty() && !it.equals("IP", true) && !it.equals("DOMAIN", true) }
                 val nodeName = panel?.let { panelDisplayName(it.name, realIp, it.domainAddress) } ?: "Панель не найдена"
+                val nodeAddress = realIp?.takeIf { it.isNotBlank() } ?: nodeName
                 val nodeTitle = if (entry) "Входной узел" else "Выходной узел"
+                val protocol = when (cascade.protocol) {
+                    app.invilink.xboard.panels.CascadeProtocol.VLESS_REALITY -> "VLESS + REALITY" to inboundProtocolColor("vless")
+                    app.invilink.xboard.panels.CascadeProtocol.HYSTERIA2 -> "HYSTERIA2" to inboundProtocolColor("hysteria")
+                    app.invilink.xboard.panels.CascadeProtocol.AMNEZIAWG -> "AMNEZIAWG" to inboundProtocolColor("amneziawg")
+                }
+                val transport = when (cascade.protocol) {
+                    app.invilink.xboard.panels.CascadeProtocol.VLESS_REALITY -> cascade.transport.name to if (palette.isDark) Color(0xFF9FC5FF) else Color(0xFF2A64A5)
+                    app.invilink.xboard.panels.CascadeProtocol.HYSTERIA2 -> "QUIC/UDP" to if (palette.isDark) Color(0xFFFFD54F) else Color(0xFFB17600)
+                    app.invilink.xboard.panels.CascadeProtocol.AMNEZIAWG -> "UDP" to if (palette.isDark) Color(0xFFFFD54F) else Color(0xFFB17600)
+                }
                 Text(country ?: "Неизвестная страна", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 Text(nodeTitle, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.secondary)
-                Text(nodeName, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
-                if (customName != null && realIp?.isNotBlank() == true && realIp != nodeName) {
-                    Text(realIp, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                if (customName != null && customName != nodeAddress) {
+                    Text(customName, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(nodeAddress, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = palette.secondary, maxLines = 1)
+                    CascadeNodeTag(protocol.first, protocol.second, "Протокол: ${protocol.first}")
+                    CascadeNodeTag(transport.first, transport.second, "Транспорт: ${transport.first}")
                 }
                 if (!cascade.entryInboundCreated || !cascade.exitInboundCreated) {
                     Text("Восстановление существующих инбаундов выполняется с проверкой изменений; при конфликте журнал сохраняется.",
@@ -186,16 +202,57 @@ private fun CascadeNodeCard(
                 }
                 if (!complete) TextButton(onClick = { confirmingForget = true }, enabled = !busy) { Text("Удалить запись") }
                 val ping = panel?.metrics?.takeIf { it.availability == PanelAvailability.ONLINE }?.latencyMillis
-                Text("API ping: ${ping?.let { "$it мс" } ?: "—"}${if (complete) "" else " · не завершён"}",
-                    style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                Text(if (entry) entryFlag else exitFlag, fontSize = 32.sp, lineHeight = 38.sp)
-                BoardIconButton(onClick = { confirming = true }, enabled = !busy,
-                    modifier = Modifier.size(48.dp).semantics { contentDescription = "Удалить каскад" }) {
-                    BoardIcon(BoardSymbol.Trash, palette.foreground, 22.dp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("API пинг: ", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                    Text(ping?.let { "$it мс" } ?: "—", style = MaterialTheme.typography.bodySmall, color = latencyColor(ping))
+                    if (!complete) Text(" · не завершён", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
                 }
             }
+            Text(if (entry) entryFlag else exitFlag, Modifier.align(Alignment.TopEnd), fontSize = 32.sp, lineHeight = 38.sp)
+            CascadeNodeDeleteButton(
+                onClick = { confirming = true },
+                enabled = !busy,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 2.dp, bottom = 2.dp),
+            )
         }
+    }
+}
+
+@Composable
+private fun CascadeNodeDeleteButton(onClick: () -> Unit, enabled: Boolean, modifier: Modifier = Modifier) {
+    val palette = LocalXBoardPalette.current
+    val iconColor = if (palette.isDark) Color.White else Color.Black
+    val border = if (palette.isDark) Color(0xFFC97780) else Color(0xFFC97A82)
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.size(36.dp).semantics { contentDescription = "Удалить каскад" },
+        shape = RoundedCornerShape(8.dp),
+        color = if (palette.isDark) Color(0xFF5B3033) else Color(0xFFFFE2E0),
+        contentColor = iconColor,
+        border = BorderStroke(1.dp, border.copy(alpha = 0.72f)),
+    ) {
+        Box(contentAlignment = Alignment.Center) { BoardIcon(BoardSymbol.Trash, iconColor, 22.dp) }
+    }
+}
+
+@Composable
+private fun CascadeNodeTag(value: String, color: Color, description: String) {
+    val palette = LocalXBoardPalette.current
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = color.copy(alpha = if (palette.isDark) 0.22f else 0.16f),
+        contentColor = color,
+        border = BorderStroke(1.dp, color.copy(alpha = 0.9f)),
+        modifier = Modifier.semantics { contentDescription = description },
+    ) {
+        Text(
+            text = value,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            fontSize = 11.sp,
+            lineHeight = 13.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+        )
     }
 }

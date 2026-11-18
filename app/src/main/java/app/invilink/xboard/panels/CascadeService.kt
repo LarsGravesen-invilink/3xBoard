@@ -81,6 +81,7 @@ internal data class CascadeMetadata(
     val exitExpectedSnapshot: String? = null,
     val protocol: CascadeProtocol = CascadeProtocol.VLESS_REALITY,
     val technicalAuth: String? = null,
+    val transport: CascadeTransport = CascadeTransport.TCP,
 ) {
     override fun toString(): String = "CascadeMetadata(id=$id, step=$step, inFlight=$inFlight, snapshots=[REDACTED])"
 }
@@ -293,7 +294,8 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
             if (obj.isNull("entryExpectedSnapshot")) null else text("entryExpectedSnapshot"),
             if (obj.isNull("exitExpectedSnapshot")) null else text("exitExpectedSnapshot"),
             if (obj.has("protocol")) CascadeProtocol.valueOf(text("protocol")) else CascadeProtocol.VLESS_REALITY,
-            if (obj.isNull("technicalAuth")) null else text("technicalAuth"))
+            if (obj.isNull("technicalAuth")) null else text("technicalAuth"),
+            if (obj.has("transport")) CascadeTransport.valueOf(text("transport")) else CascadeTransport.TCP)
         require(metadata.id == id)
         validate(metadata)
         return metadata
@@ -314,7 +316,8 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
             .put("entryExpectedSnapshot", m.entryExpectedSnapshot ?: JSONObject.NULL)
             .put("exitExpectedSnapshot", m.exitExpectedSnapshot ?: JSONObject.NULL)
             .put("protocol", m.protocol.name)
-            .put("technicalAuth", m.technicalAuth ?: JSONObject.NULL).toString()
+            .put("technicalAuth", m.technicalAuth ?: JSONObject.NULL)
+            .put("transport", m.transport.name).toString()
         require(raw.length <= 262144) { "Снимок инбаунда слишком велик для журнала." }
         check(preferences.edit().putString(m.id, raw).commit()) { "Не удалось сохранить журнал каскадов." }
         check(read(m.id) == m) { "Не удалось подтвердить запись журнала каскадов." }
@@ -1448,7 +1451,8 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
             entryInboundCreated = entrySnapshot == null, exitInboundCreated = exitSnapshot == null,
             entryInboundSnapshot = entrySnapshot, exitInboundSnapshot = exitSnapshot,
             protocol = request.protocol,
-            technicalAuth = if (request.protocol == CascadeProtocol.HYSTERIA2) exitClient.values.getValue("auth") else null)
+            technicalAuth = if (request.protocol == CascadeProtocol.HYSTERIA2) exitClient.values.getValue("auth") else null,
+            transport = request.transport)
         check(journal.reserve(metadata)) { "ID или имя каскада уже занято; обновите журнал и повторите попытку." }
         try {
             suspend fun begin(step: CascadeStep) {
@@ -1610,13 +1614,21 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
 
     private fun awgPeerAddress(subnet: String): String = subnet.removeSuffix(".0") + ".2/32"
 
-    private fun awgInbound(name: String, tag: String, port: Int, subnet: String, request: CascadeRequest): InboundDraft {
+    private fun awgInbound(name: String, tag: String, port: Int, subnet: String, request: CascadeRequest): InboundDraft =
+        amneziaWgInbound(name, tag, port, subnet, request.awgMtu, request.awgPrimaryDns, request.awgSecondaryDns)
+
+    internal fun amneziaWgInbound(name: String, tag: String, port: Int, subnet: String,
+        mtu: Int = 1280, primaryDns: String = "8.8.8.8", secondaryDns: String = "1.1.1.1"): InboundDraft {
+        require(mtu in 576..65535) { "MTU AmneziaWG должен быть от 576 до 65535." }
+        require(listOf(primaryDns, secondaryDns).all { it.matches(Regex("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}")) }) {
+            "Укажите корректные IPv4 DNS AmneziaWG."
+        }
         val serverPair = ConnectionGenerators.amneziaWgKeyPair()
         var draft = InboundDraft(name = name, port = port.toString()).update("protocol", "amneziawg")
             .update("name", name).update("port", port.toString()).update("tag", tag)
             .update("awg:subnetIp", subnet).update("awg:subnetCidr", "24")
-            .update("awg:mtu", request.awgMtu.toString())
-            .update("awg:primaryDns", request.awgPrimaryDns).update("awg:secondaryDns", request.awgSecondaryDns)
+            .update("awg:mtu", mtu.toString())
+            .update("awg:primaryDns", primaryDns).update("awg:secondaryDns", secondaryDns)
         val settings = JSONObject(draft.protocolSettings)
         settings.getJSONObject("server").put("privateKey", serverPair.getValue("privateKey")).put("publicKey", serverPair.getValue("publicKey"))
         draft = draft.copy(protocolSettings = settings.toString())

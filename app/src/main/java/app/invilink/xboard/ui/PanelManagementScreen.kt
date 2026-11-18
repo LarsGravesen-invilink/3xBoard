@@ -410,18 +410,19 @@ private fun InboundBlock(
                 }
             }
             if (allowEditInbound) BoardIconButton(onClick = onSettings, enabled = enabled,
-                modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(palette.soft, androidx.compose.foundation.shape.CircleShape)
-                    .border(1.dp, palette.line, androidx.compose.foundation.shape.CircleShape)
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
+                    .background(palette.soft, RoundedCornerShape(10.dp))
+                    .border(1.dp, palette.line, RoundedCornerShape(10.dp))
                     .semantics { contentDescription = "Настройки инбаунда ${inbound.name}" }) {
                 BoardIcon(BoardSymbol.Edit, palette.foreground, 22.dp)
             }
+            Spacer(Modifier.size(4.dp))
             if (allowDeleteInbound) BoardIconButton(onClick = onDelete, enabled = enabled,
-                modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(palette.soft, androidx.compose.foundation.shape.CircleShape)
-                    .border(1.dp, palette.line, androidx.compose.foundation.shape.CircleShape)
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
+                    .background(if (palette.isDark) Color(0xFF5B3033) else Color(0xFFFFE2E0), RoundedCornerShape(10.dp))
+                    .border(1.dp, if (palette.isDark) Color(0xFFC97780).copy(alpha = 0.65f) else Color(0xFFC97A82).copy(alpha = 0.72f), RoundedCornerShape(10.dp))
                     .semantics { contentDescription = "Удалить инбаунд ${inbound.name}" }) {
-                BoardIcon(BoardSymbol.Trash, palette.foreground, 22.dp)
+                BoardIcon(BoardSymbol.Trash, Color.White, 22.dp)
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -532,18 +533,19 @@ private fun ClientRow(client: ClientDetail, onClick: () -> Unit, onEdit: () -> U
                 BoardIcon(BoardSymbol.Power, powerColor.copy(alpha = if (enabled) 1f else 0.45f), 22.dp)
             }
             BoardIconButton(onClick = onEdit, enabled = enabled && !isProtected,
-                modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(palette.background, androidx.compose.foundation.shape.CircleShape)
-                    .border(1.dp, palette.line, androidx.compose.foundation.shape.CircleShape)
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
+                    .background(palette.background, RoundedCornerShape(10.dp))
+                    .border(1.dp, palette.line, RoundedCornerShape(10.dp))
                     .semantics { contentDescription = "Редактировать клиента ${clientDisplayName(client.visibleName)}" }) {
                 BoardIcon(BoardSymbol.Edit, palette.foreground, 22.dp)
             }
+            Spacer(Modifier.size(4.dp))
             BoardIconButton(onClick = onDelete, enabled = enabled && !isProtected,
-                modifier = Modifier.size(40.dp).clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(if (palette.isDark) Color(0xFF6B3D43).copy(alpha = 0.55f) else Color(0xFFF2D5D8), androidx.compose.foundation.shape.CircleShape)
-                    .border(1.dp, if (palette.isDark) Color(0xFFC97780).copy(alpha = 0.65f) else Color(0xFFC97A82).copy(alpha = 0.72f), androidx.compose.foundation.shape.CircleShape)
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
+                    .background(if (palette.isDark) Color(0xFF5B3033) else Color(0xFFFFE2E0), RoundedCornerShape(10.dp))
+                    .border(1.dp, if (palette.isDark) Color(0xFFC97780).copy(alpha = 0.65f) else Color(0xFFC97A82).copy(alpha = 0.72f), RoundedCornerShape(10.dp))
                     .semantics { contentDescription = "Удалить клиента ${clientDisplayName(client.visibleName)}" }) {
-                BoardIcon(BoardSymbol.Trash, if (palette.isDark) Color(0xFFF0B6BC) else Color(0xFFAB4650), 22.dp)
+                BoardIcon(BoardSymbol.Trash, Color.White, 22.dp)
             }
         }
         BlockDivider()
@@ -572,18 +574,12 @@ private fun ClientRow(client: ClientDetail, onClick: () -> Unit, onEdit: () -> U
 }
 
 @Composable
-private fun AdaptiveClientName(value: String) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
+private fun AdaptiveClientName(value: String, modifier: Modifier = Modifier.fillMaxWidth()) {
+    BoxWithConstraints(modifier) {
         val fontSize = (maxWidth.value / (value.length.coerceAtLeast(1) * 0.55f)).coerceIn(5f, 18f)
         Text(value, style = MaterialTheme.typography.bodyLarge, fontSize = fontSize.sp, fontWeight = FontWeight.SemiBold,
             maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
     }
-}
-
-@Composable
-private fun TrafficSummary(up: Long?, down: Long?, total: Long?) {
-    ClientTrafficArrows(up, down)
-    Text("Лимит: ${limitLabel(total)}", style = MaterialTheme.typography.bodySmall, color = LocalXBoardPalette.current.secondary)
 }
 
 @Composable
@@ -592,6 +588,17 @@ private fun InboundTag(value: String, color: Color, modifier: Modifier = Modifie
     Box(modifier.border(1.dp, color.copy(alpha = 0.9f), shape).background(color.copy(alpha = if (LocalXBoardPalette.current.isDark) 0.18f else 0.14f), shape)
         .padding(horizontal = 6.dp, vertical = 3.dp), contentAlignment = Alignment.Center) {
         Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge, color = color)
+    }
+}
+
+@Composable
+internal fun latencyColor(latencyMillis: Long?): Color {
+    val palette = LocalXBoardPalette.current
+    return when {
+        latencyMillis == null -> palette.secondary
+        latencyMillis < 500L -> if (palette.isDark) Color(0xFF79D98C) else Color(0xFF16833A)
+        latencyMillis < 1000L -> if (palette.isDark) Color(0xFFFFD56A) else Color(0xFFA66A00)
+        else -> if (palette.isDark) Color(0xFFFF8D85) else Color(0xFFC62828)
     }
 }
 
@@ -836,7 +843,7 @@ internal fun ClientDetailsDialog(state: ScreenModel, onDismiss: () -> Unit, onRe
     val links = if (subscriptionSelected) state.clientLinks.subscriptions else state.clientLinks.connections
     val index = (if (subscriptionSelected) subscriptionIndex else connectionIndex).coerceIn(0, (links.size - 1).coerceAtLeast(0))
     val swipeThreshold = with(LocalDensity.current) { 60.dp.toPx() }
-    Dialog(onDismissRequest = { if (!state.clientSaving) onDismiss() }, properties = DialogProperties(securePolicy = androidx.compose.ui.window.SecureFlagPolicy.SecureOn, usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = { if (!state.clientSaving) onDismiss() }, properties = DialogProperties(securePolicy = androidx.compose.ui.window.SecureFlagPolicy.Inherit, usePlatformDefaultWidth = false)) {
         SessionDialogGuard()
         Surface(modifier = Modifier.fillMaxSize(), color = palette.background) {
             Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
@@ -864,15 +871,16 @@ internal fun ClientDetailsDialog(state: ScreenModel, onDismiss: () -> Unit, onRe
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             val flag = countryFlagForClientName(client.visibleName)
                             if (flag.isNotEmpty()) Text(flag, fontSize = 26.sp)
-                            Text(clientDisplayName(client.visibleName).ifBlank { "Клиент без имени" }, Modifier.weight(1f),
-                                style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
-                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            AdaptiveClientName(
+                                clientDisplayName(client.visibleName).ifBlank { "Клиент без имени" },
+                                Modifier.weight(1f),
+                            )
+                            ClientTrafficArrows(client.up, client.down)
                             if (allowTrafficReset) BoardIconButton(
                                 onClick = { confirmTrafficReset = true }, enabled = !state.clientSaving,
                                 modifier = Modifier.size(48.dp).semantics { contentDescription = "Сбросить трафик клиента" },
                             ) { BoardIcon(BoardSymbol.Refresh, palette.foreground, 22.dp) }
                         }
-                        if (client.enabled) TrafficSummary(client.up, client.down, client.total)
                         if (state.clientSaving) CircularProgressIndicator(Modifier.size(20.dp))
                         state.clientActionError?.let { Text(it, color = palette.error, style = MaterialTheme.typography.bodySmall) }
                     }
@@ -942,14 +950,11 @@ internal fun ClientDetailsDialog(state: ScreenModel, onDismiss: () -> Unit, onRe
                             LinkBlock(if (pageLinks.size > 1) "$title ${pageIndex + 1}" else title, link)
                         } else if (!state.linksLoading && state.linksError == null && (!subscription || state.clientLinks.warning == null)) {
                             DetailBlock {
-                                Text(if (subscription) "Подписка не настроена или отключена в 3x-UI."
-                                    else "3x-UI не вернул ключи подключения для этого клиента.",
+                                Text(if (subscription) "Подписка не настроена или отключена в 3x-ui."
+                                    else "3x-ui не вернул ключи подключения для этого клиента.",
                                     style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                             }
                         }
-                    }
-                    BoardTextButton(onClick = onDismiss, enabled = !state.clientSaving, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                        Text("Закрыть", style = MaterialTheme.typography.bodyLarge)
                     }
                 }
             }
@@ -965,7 +970,7 @@ private fun LinkBlock(title: String, link: String) {
         Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         var expandedQr by remember(link) { mutableStateOf(false) }
         Box(Modifier.fillMaxWidth().clickable { expandedQr = true }) { key(link) { QrCode(link) } }
-        if (expandedQr) Dialog(onDismissRequest = { expandedQr = false }, properties = DialogProperties(securePolicy = androidx.compose.ui.window.SecureFlagPolicy.SecureOn, usePlatformDefaultWidth = false)) {
+        if (expandedQr) Dialog(onDismissRequest = { expandedQr = false }, properties = DialogProperties(securePolicy = androidx.compose.ui.window.SecureFlagPolicy.Inherit, usePlatformDefaultWidth = false)) {
             val scale = remember { Animatable(0.7f) }
             LaunchedEffect(link) { scale.animateTo(1f, tween(250)) }
             Surface(Modifier.fillMaxSize().clickable { expandedQr = false }, color = palette.background) {
@@ -974,34 +979,62 @@ private fun LinkBlock(title: String, link: String) {
                 }
             }
         }
-        Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(palette.soft).padding(12.dp)) {
-            Text(link, style = MaterialTheme.typography.bodyMedium, color = palette.foreground)
+        BoxWithConstraints(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(palette.soft).padding(12.dp)) {
+            val maximumLines = 4
+            val fontSize = (maxWidth.value * maximumLines / (link.length.coerceAtLeast(1) * 0.52f)).coerceIn(8f, 18f)
+            Text(link, style = MaterialTheme.typography.bodyMedium, fontSize = fontSize.sp, color = palette.foreground,
+                maxLines = maximumLines, softWrap = true, overflow = TextOverflow.Clip)
         }
-        BoardButton(
-            onClick = {
+        val scheme = Uri.parse(link).scheme?.lowercase()
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            ClientLinkActionButton(
+                symbol = BoardSymbol.Copy,
+                color = if (palette.isDark) Color(0xFF78D9FF) else Color(0xFF006E9F),
+                description = if (title.startsWith("Подписка")) "Копировать ссылку" else "Копировать ключ",
+            ) {
                 val clip = ClipData.newPlainText(title, link)
                 clip.description.extras = PersistableBundle().apply { putBoolean("android.content.extra.IS_SENSITIVE", true) }
                 (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
                 Toast.makeText(context, "Скопировано", Toast.LENGTH_SHORT).show()
-            },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        ) { Text(if (title.startsWith("Подписка")) "Копировать ссылку" else "Копировать ключ", style = MaterialTheme.typography.bodyLarge) }
-        BoardTextButton(
-            onClick = {
+            }
+            Spacer(Modifier.size(12.dp))
+            ClientLinkActionButton(
+                symbol = BoardSymbol.Share,
+                color = if (palette.isDark) Color(0xFFC59BFF) else Color(0xFF7650A8),
+                description = "Поделиться",
+            ) {
                 launchExternal(context, linkChooser(Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, link)
                 }, "Отправить через", link))
-            },
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        ) { Text("Поделиться", style = MaterialTheme.typography.bodyLarge) }
-        val scheme = Uri.parse(link).scheme?.lowercase()
-        if (scheme in setOf("vless", "vmess", "trojan", "ss", "hysteria", "hysteria2", "hy2", "tuic", "vpn", "wireguard", "wg", "amneziawg", "https", "http")) {
-            BoardTextButton(
-                onClick = { launchExternal(context, linkChooser(Intent(Intent.ACTION_VIEW, Uri.parse(link)), "Открыть в клиенте", link)) },
-                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-            ) { Text("Открыть в клиенте", style = MaterialTheme.typography.bodyLarge) }
+            }
+            if (scheme in setOf("vless", "vmess", "trojan", "ss", "hysteria", "hysteria2", "hy2", "tuic", "vpn", "wireguard", "wg", "amneziawg", "https", "http")) {
+                Spacer(Modifier.size(12.dp))
+                ClientLinkActionButton(
+                    symbol = BoardSymbol.Open,
+                    color = if (palette.isDark) Color(0xFF78D996) else Color(0xFF16833A),
+                    description = "Открыть в клиенте",
+                ) {
+                    launchExternal(context, linkChooser(Intent(Intent.ACTION_VIEW, Uri.parse(link)), "Открыть в клиенте", link))
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun ClientLinkActionButton(symbol: BoardSymbol, color: Color, description: String, onClick: () -> Unit) {
+    val palette = LocalXBoardPalette.current
+    val shape = RoundedCornerShape(16.dp)
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.size(width = 78.dp, height = 52.dp).semantics { contentDescription = description },
+        shape = shape,
+        color = color.copy(alpha = if (palette.isDark) 0.23f else 0.16f),
+        contentColor = color,
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = if (palette.isDark) 0.85f else 0.95f)),
+    ) {
+        Box(contentAlignment = Alignment.Center) { BoardIcon(symbol, color, 27.dp) }
     }
 }
 

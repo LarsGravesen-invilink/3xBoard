@@ -89,7 +89,7 @@ internal fun parseSshPreflight(
             }
             "warning" -> {
                 val message = when {
-                    value == "installation-remnants" && stage == "installation" -> "Обнаружены остаточные файлы 3x-UI."
+                    value == "installation-remnants" && stage == "installation" -> "Обнаружены остаточные файлы 3x-ui."
                     value == "disk-unknown" && stage == "disk" -> "Свободное место определить не удалось (disk: unknown). Это информационное предупреждение, не запрет установки."
                     value == "systemd-degraded" && stage == "systemd" -> "systemd находится в состоянии degraded. Установка разрешена; проверьте неисправные службы отдельно."
                     value == "ports-unavailable:$stage" && stage in setOf("tcp", "udp") -> "Не удалось проверить локальные привязки ${stage.orEmpty().uppercase()}. Проверьте порт 80 и выбранный порт панели вручную."

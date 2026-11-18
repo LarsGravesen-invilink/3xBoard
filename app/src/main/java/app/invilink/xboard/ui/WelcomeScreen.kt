@@ -116,7 +116,7 @@ internal fun WelcomeScreen(onNext: () -> Unit) {
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "Менеджер для работы с 3x-UI на Ваших серверах.",
+                    "Менеджер для работы с 3x-ui на Ваших серверах.",
                     modifier = Modifier.widthIn(max = 420.dp),
                     style = MaterialTheme.typography.bodyLarge,
                     color = palette.secondary,

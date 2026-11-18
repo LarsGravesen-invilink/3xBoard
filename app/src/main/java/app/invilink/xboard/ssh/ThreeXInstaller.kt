@@ -43,10 +43,10 @@ class ThreeXInstaller(private val connection: SshConnection) {
             if (selected.sslMode == SslMode.IP && selected.publicIp != connection.connectedServerAddress) {
                 throw InstallerFailure("IP SSH-сервера изменился. Повторите подключение и подтвердите адрес сертификата.")
             }
-            progress(onProgress, "Проверка root, ОС, наличия 3x-UI; занятые порты — только предупреждения.", 3)
+            progress(onProgress, "Проверка root, ОС, наличия 3x-ui; занятые порты — только предупреждения.", 3)
             val report = connection.preflight(selected.panelPort.toInt(), needsHttpChallenge = true)
             if (!report.ready) throw InstallerFailure(report.conflicts.joinToString("\n").ifBlank { "Не подтверждены root-доступ или поддерживаемая ОС. Установка не запускалась." })
-            if (report.existingInstallation) throw InstallerFailure("Обнаружена существующая 3x-UI. Выберите обновление или переустановку с сохранением данных; новая установка не запускалась.")
+            if (report.existingInstallation) throw InstallerFailure("Обнаружена существующая 3x-ui. Выберите обновление или переустановку с сохранением данных; новая установка не запускалась.")
             if (report.warnings.isNotEmpty()) progress(onProgress, "Предупреждения не блокируют продолжение: " + report.warnings.joinToString(" "))
             checkedCommand(assignments(
                 "XBOARD_TARGET" to certificateTarget(selected),
@@ -410,10 +410,10 @@ class ThreeXInstaller(private val connection: SshConnection) {
             "BOOTSTRAP" to "Установка необходимых пакетов через apt.",
             "DOWNLOAD" to "Загрузка закреплённого официального installer по HTTPS.",
             "PATCH" to "Подготовка передачи параметров и повторного использования SSL.",
-            "INSTALL" to "Запущен официальный установщик выбранной версии 3x-UI.",
+            "INSTALL" to "Запущен официальный установщик выбранной версии 3x-ui.",
             "ARCHIVE_VERIFIED" to "SHA-256 архива релиза совпал с закреплённым значением.",
-            "SCRIPT_DOWNLOAD" to "Загрузка и проверка управляющего скрипта 3x-UI.",
-            "EXTRACT" to "Распаковка проверенного архива 3x-UI.",
+            "SCRIPT_DOWNLOAD" to "Загрузка и проверка управляющего скрипта 3x-ui.",
+            "EXTRACT" to "Распаковка проверенного архива 3x-ui.",
             "CONFIGURE" to "Настройка новой панели без передачи пароля в аргументах процессов.",
             "ACME" to "Проверка и повторное использование TLS либо выпуск ACME для выбранного домена или IP.",
             "RESULT" to "Проверка свежести и прав файла результата.",
@@ -516,7 +516,7 @@ class ThreeXInstaller(private val connection: SshConnection) {
             result = subprocess.run(['/usr/bin/systemctl', 'show', 'x-ui.service', '--property=LoadState,ActiveState', '--all'],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10)
             if result.returncode not in (0, 1) or set(result.stdout.splitlines()) != {'LoadState=not-found', 'ActiveState=inactive'}:
-                raise SystemExit('3x-UI service absence is not confirmed')
+                raise SystemExit('3x-ui service absence is not confirmed')
             roots = ('/usr/bin/x-ui', '/etc/default/x-ui', '/etc/sysconfig/x-ui', '/var/log/x-ui',
                 '/usr/local/x-ui-linux-amd64.tar.gz', '/usr/local/x-ui-linux-arm64.tar.gz',
                 '/etc/systemd/system/x-ui.service.d', '/run/systemd/system/x-ui.service.d',

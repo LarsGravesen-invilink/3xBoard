@@ -410,7 +410,7 @@ class ServerManager(
     }
 
     private suspend fun prepareSshOnlyCandidate(ticket: Long, credentials: SshCredentials, identity: SshHostIdentity, preflight: ServerPreflight) {
-        check(preflight.installationState == PanelInstallationState.ABSENT) { "Отсутствие 3x-UI не подтверждено." }
+        check(preflight.installationState == PanelInstallationState.ABSENT) { "Отсутствие 3x-ui не подтверждено." }
         val existing = withContext(Dispatchers.IO) { store.loadSshOnly() }
             .firstOrNull { it.identity.host == identity.host && it.identity.port == identity.port }
         checkCurrent(ticket)
@@ -684,7 +684,7 @@ class ServerManager(
     fun requestInstall() = synchronized(lock) {
         if (mutableState.value.busy || installing || mutableState.value.installer.step == InstallStep.COMPLETE) return@synchronized
         if (!isOnline()) {
-            draftError("Для установки или переустановки 3x-UI требуется подключение к интернету. Операция не добавлена в очередь.")
+            draftError("Для установки или переустановки 3x-ui требуется подключение к интернету. Операция не добавлена в очередь.")
             return@synchronized
         }
         clearDialogs()
@@ -716,12 +716,12 @@ class ServerManager(
         val selection = InstallSelection(credentials, options, identity)
         val pending = pendingJobId != null
         if (!pending && release == null) {
-            draftError("Сначала проверьте актуальную версию 3x-UI.")
+            draftError("Сначала проверьте актуальную версию 3x-ui.")
             checkRelease()
             return@synchronized
         }
         if (!pending && ((options.operation == InstallOperation.FRESH) == (draft.preflight?.existingInstallation == true))) {
-            draftError("Для существующей 3x-UI выберите обновление или переустановку с сохранением данных. Новая установка поверх существующей запрещена.")
+            draftError("Для существующей 3x-ui выберите обновление или переустановку с сохранением данных. Новая установка поверх существующей запрещена.")
             return@synchronized
         }
         if (pending) {
@@ -740,7 +740,7 @@ class ServerManager(
                 publish(ticket) { it.copy(installer = it.installer.copy(preflight = report),
                     message = "Проверка выбранного порта завершена. Предупреждения не запрещают продолжение.") }
                 if (!report.ready || report.existingInstallation) {
-                    publish(ticket) { it.copy(error = if (report.existingInstallation) "Обнаружена существующая 3x-UI. Вернитесь к подключению и выберите обслуживание; новая установка не запускалась." else report.conflicts.joinToString("\n")) }
+                    publish(ticket) { it.copy(error = if (report.existingInstallation) "Обнаружена существующая 3x-ui. Вернитесь к подключению и выберите обслуживание; новая установка не запускалась." else report.conflicts.joinToString("\n")) }
                 } else {
                     synchronized(lock) {
                         requireTicket(ticket)
@@ -760,8 +760,8 @@ class ServerManager(
             confirmation = ServerConfirmation(
                 null, if (pending) RESUME_INSTALL else INSTALL,
                 if (pending) "Проверить результат установки" else when (selection.options.operation) {
-                    InstallOperation.FRESH -> "Установить 3x-UI с правами root"
-                    InstallOperation.UPDATE -> "Обновить 3x-UI с сохранением данных"
+                    InstallOperation.FRESH -> "Установить 3x-ui с правами root"
+                    InstallOperation.UPDATE -> "Обновить 3x-ui с сохранением данных"
                     InstallOperation.REINSTALL -> "Переустановить программу без сброса данных"
                 },
                 if (pending) {
@@ -771,7 +771,7 @@ class ServerManager(
                         (if (selection.options.operation == InstallOperation.REINSTALL) "Текущая версия сохранится. " else "Версия будет обновлена до ${release?.version}. ") +
                         "Настройки и данные сохранятся; панель будет запущена и добавлена в 3xBoard. Возможен перерыв VPN."
                 } else {
-                    "Установить 3x-UI и xRay на выбранном VPS?\nSSL: ${selection.options.certificateTarget}. Порт панели: ${selection.options.panelPort}. " +
+                    "Установить 3x-ui и xRay на выбранном VPS?\nSSL: ${selection.options.certificateTarget}. Порт панели: ${selection.options.panelPort}. " +
                         "Для SSL откройте порт 80 извне; DNS и firewall настраиваются отдельно." +
                         (if (draft.preflight?.warnings.orEmpty().isEmpty()) "" else "\n\nПредупреждения:\n" + draft.preflight?.warnings.orEmpty().joinToString("\n"))
                 },
@@ -789,7 +789,7 @@ class ServerManager(
             INSTALL, RESUME_INSTALL -> {
                 if (!isOnline()) {
                     confirmedInstall = null
-                    draftError("Для установки или переустановки 3x-UI требуется подключение к интернету. Операция не добавлена в очередь.")
+                    draftError("Для установки или переустановки 3x-ui требуется подключение к интернету. Операция не добавлена в очередь.")
                     return@synchronized
                 }
                 val selection = confirmedInstall ?: return@synchronized
@@ -917,14 +917,14 @@ class ServerManager(
                 val remaining = withContext(Dispatchers.IO) { store.removeSshOnlyAfterPanelSaved(panel) }
                 synchronized(lock) {
                     mutableState.value = mutableState.value.copy(servers = servers, sshOnlyServers = remaining,
-                        message = "Обнаруженная 3x-UI добавлена в приложение.")
+                        message = "Обнаруженная 3x-ui добавлена в приложение.")
                 }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) {
             synchronized(lock) {
                 if (mutableState.value.sshOnlyServers.any { it.id == claimed.id }) {
-                    mutableState.value = mutableState.value.copy(error = "Автоматический импорт 3x-UI не подтверждён. Проверьте панель и токены вручную; повторная попытка не запускается автоматически.")
+                    mutableState.value = mutableState.value.copy(error = "Автоматический импорт 3x-ui не подтверждён. Проверьте панель и токены вручную; повторная попытка не запускается автоматически.")
                 }
             }
         } finally { ssh.close() }
@@ -1072,11 +1072,11 @@ class ServerManager(
         if (mutableState.value.busy || installing) return@synchronized
         val server = mutableState.value.controlPanelId?.let(::currentServer) ?: return@synchronized
         if (action == "UNINSTALL_AND_REMOVE" && server.imported) {
-            reportError("Удаление 3x-UI с сервера доступно только если 3x-UI было установлено через 3xBoard.")
+            reportError("Удаление 3x-ui с сервера доступно только если 3x-ui было установлено через 3xBoard.")
             return@synchronized
         }
         if (action == "UNINSTALL_AND_REMOVE" && !isOnline()) {
-            reportError("Для удаления 3x-UI требуется подключение к интернету. Операция не добавлена в очередь.")
+            reportError("Для удаления 3x-ui требуется подключение к интернету. Операция не добавлена в очередь.")
             return@synchronized
         }
         if (action == "RENAME") {
@@ -1101,7 +1101,7 @@ class ServerManager(
             "REMOVE_LOCAL" -> "Удалить сервер из 3xBoard" to
                 "Запись, данные доступа и несинхронизированные изменения будут удалены из 3xBoard. Панель на VPS продолжит работать."
             "UNINSTALL_AND_REMOVE" -> "Удалить и очистить VPS/VDS" to
-                "3x-UI, её инбаунды, клиенты и локальная очередь будут удалены. VPN этой панели отключится. " +
+                "3x-ui, её инбаунды, клиенты и локальная очередь будут удалены. VPN этой панели отключится. " +
                     "ОС, другие службы и общие сертификаты сохранятся. Резервная копия не создаётся; удаление необратимо."
             else -> {
                 reportError("Неизвестное действие сервера.")
@@ -1281,7 +1281,7 @@ class ServerManager(
             if (report.installationState == PanelInstallationState.UNKNOWN) {
                 publish(ticket) { it.copy(message = null, installer = it.installer.copy(
                     connected = true, hostIdentity = identity, preflight = report,
-                    error = "Не удалось подтвердить наличие или отсутствие 3x-UI. Проверьте права root и состояние сервера; данные не изменены.")) }
+                    error = "Не удалось подтвердить наличие или отсутствие 3x-ui. Проверьте права root и состояние сервера; данные не изменены.")) }
                 return
             }
             publish(ticket) { it.copy(message = "Обнаружение адреса панели и API-токена…") }
@@ -1341,7 +1341,7 @@ class ServerManager(
         }
         startTask("Установка не подтверждена. Задача могла продолжить работу на VPS; повторная установка автоматически не запускается.", true) { ticket ->
             awaitDisconnect(ticket)
-            check(isOnline()) { "Для установки или переустановки 3x-UI требуется подключение к интернету. Операция не добавлена в очередь." }
+            check(isOnline()) { "Для установки или переустановки 3x-ui требуется подключение к интернету. Операция не добавлена в очередь." }
             val progress: suspend (InstallProgress) -> Unit = { received ->
                 publish(ticket) {
                     it.copy(installer = it.installer.copy(
@@ -1354,7 +1354,7 @@ class ServerManager(
             if (selection.options.operation != InstallOperation.FRESH) {
                 publish(ticket) { it.copy(installer = it.installer.copy(pendingMaintenance = true)) }
                 val result = maintenance.run(selection.credentials, selection.identity, selection.options.operation, resume, progress,
-                    checkNotNull(release) { "Сначала проверьте доступную версию 3x-UI." })
+                    checkNotNull(release) { "Сначала проверьте доступную версию 3x-ui." })
                 if (!result.previouslyActive) {
                     val started = connection.execute("systemctl start x-ui.service", timeoutMillis = 30_000, maxBytes = 4096)
                     check(started.exitCode == 0) { "Не удалось запустить службу панели после установки." }
@@ -1374,7 +1374,7 @@ class ServerManager(
                 runner.resumeInstall(selection.credentials, selection.identity, selection.options, progress)
             } else {
                 runner.install(selection.credentials, selection.identity, selection.options, progress,
-                    checkNotNull(release) { "Сначала проверьте доступную версию 3x-UI." })
+                    checkNotNull(release) { "Сначала проверьте доступную версию 3x-ui." })
             }
             synchronized(lock) {
                 verifiedInstall = server.copy(credentials = selection.credentials.takeIf { selection.options.rememberSsh })
@@ -1493,7 +1493,7 @@ class ServerManager(
                                 synchronized(lock) {
                                     requireTicket(ticket)
                                     input.trySend(checkNotNull(consoleCommand) + "\n")
-                                    val deadline = android.os.SystemClock.elapsedRealtime() + 300_000L
+                                    val deadline = android.os.SystemClock.elapsedRealtime() + CONSOLE_SESSION_MILLIS
                                     mutableState.value = mutableState.value.copy(consoleActive = true, consoleAwaitingOutput = true, consoleDeadlineElapsed = deadline)
                                     consoleTimer?.cancel()
                                     consoleTimer = scope.launch {
@@ -1537,12 +1537,12 @@ class ServerManager(
                 "REBOOT_SERVER" -> ThreeXInstaller(connection).serverAction(ServerAction.REBOOT_SERVER)
                 "RESTART_XRAY" -> ThreeXInstaller(connection).serverAction(ServerAction.RESTART_XRAY)
                 "UNINSTALL_AND_REMOVE" -> {
-                    check(isOnline()) { "Для удаления 3x-UI требуется подключение к интернету. Операция не добавлена в очередь." }
-                    check(!selected.server.imported) { "Удаление 3x-UI с сервера доступно только если 3x-UI было установлено через 3xBoard." }
+                    check(isOnline()) { "Для удаления 3x-ui требуется подключение к интернету. Операция не добавлена в очередь." }
+                    check(!selected.server.imported) { "Удаление 3x-ui с сервера доступно только если 3x-ui было установлено через 3xBoard." }
                     synchronized(lock) {
                         requireTicket(ticket)
                         removingPanelId = selected.server.panelId
-                        mutableState.value = mutableState.value.copy(message = "Удаление 3x-UI…")
+                        mutableState.value = mutableState.value.copy(message = "Удаление 3x-ui…")
                     }
                     try {
                         withContext(NonCancellable) {
@@ -1558,7 +1558,7 @@ class ServerManager(
                             if (ticket == generation) mutableState.value = mutableState.value.copy(message = null)
                         }
                     }
-                    "3x-UI удален с сервера. Сервер удален из 3xBoard"
+                    "3x-ui удален с сервера. Сервер удален из 3xBoard"
                 }
                 else -> error("action")
             }
@@ -1801,6 +1801,7 @@ exception is ServerStoreException -> exception.message ?: failure
         identity.host == server.sshHost && identity.port == server.sshPort
 
     private companion object {
+        const val CONSOLE_SESSION_MILLIS = 600_000L
         const val INSTALL = "INSTALL"
         const val RESUME_INSTALL = "RESUME_INSTALL"
         const val SAVE_RESULT = "SAVE_RESULT"

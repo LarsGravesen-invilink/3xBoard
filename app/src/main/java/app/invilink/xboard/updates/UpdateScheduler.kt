@@ -36,6 +36,7 @@ object UpdateScheduler {
     private const val JOB_ID = 24018
     private const val NOTIFICATION_ID = 24018
     private const val CHANNEL = "app_updates"
+    internal const val LAUNCH_REMINDER_INTERVAL_MILLIS = 24 * 60 * 60 * 1000L
     private val mutableAvailableEvents = MutableStateFlow(0L)
     val availableEvents = mutableAvailableEvents.asStateFlow()
     private fun prefs(context: Context) = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
@@ -106,7 +107,18 @@ object UpdateScheduler {
         return isUpdateCoolingDown(declined, System.currentTimeMillis())
     }
 
-    @Synchronized internal fun recordAvailable(context: Context, release: UpdateRelease) {
+    /** A launch check always runs; a known release is shown at most once per reminder interval. */
+    @Synchronized fun shouldShowLaunchReminder(context: Context, release: UpdateRelease): Boolean {
+        if (coolingDown(context)) return false
+        val now = System.currentTimeMillis()
+        val preferences = prefs(context)
+        val lastVersion = preferences.getString("launchReminderVersion", null)
+        val lastShown = preferences.getLong("launchReminderAt", 0L)
+        if (!shouldRemindForRelease(lastVersion, lastShown, release.version.text, now)) return false
+        return preferences.edit().putString("launchReminderVersion", release.version.text).putLong("launchReminderAt", now).commit()
+    }
+
+    @Synchronized fun recordAvailable(context: Context, release: UpdateRelease) {
         if (!isEnabled(context) || !notificationsAllowed(context) || coolingDown(context)) return
         prefs(context).edit().putString("releaseVersion", release.version.text)
             .putString("releaseUrl", release.url).putLong("releaseSize", release.size)

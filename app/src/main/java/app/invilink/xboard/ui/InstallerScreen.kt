@@ -96,7 +96,7 @@ internal fun InstallerScreen(
     val focusManager = LocalFocusManager.current
     LaunchedEffect(state.step) { focusManager.clearFocus(force = true) }
     ServerUiScreen(onBack = onBack, backEnabled = !locked, contentKey = state.step,
-        title = "Установка 3x-UI на VPS/VDS") {
+        title = "Установка 3x-ui на VPS/VDS") {
         Text(
             text = when {
                 state.versionLoading -> "Проверяем актуальную версию…"
@@ -131,7 +131,7 @@ internal fun InstallerScreen(
                             ServerUiValue("Операционная система", report.os)
                             ServerUiValue("Архитектура", report.architecture)
                             ServerUiValue("Права root", if (report.root) "Подтверждены" else "Не подтверждены")
-                            ServerUiValue("3x-UI", report.installedVersion ?: if (report.existingInstallation) "Обнаружена" else "Не установлена")
+                            ServerUiValue("3x-ui", report.installedVersion ?: if (report.existingInstallation) "Обнаружена" else "Не установлена")
                             if (report.warnings.isNotEmpty()) ServerUiNotice("Предупреждения", report.warnings.take(12).joinToString("\n"))
                             if (report.conflicts.isNotEmpty()) ServerUiError(report.conflicts.take(12).joinToString("\n"))
                             if (report.details.isNotBlank()) ServerUiCaption(report.details.take(1600))
@@ -166,7 +166,7 @@ internal fun InstallerScreen(
                                     "Обновление до официального релиза ${state.availableVersion ?: "после проверки версии"}."
                                 },
                             )
-                            ServerUiCaption("Штатная установка официальной 3x-UI с SQLite. Подлинность программных файлов проверяется перед заменой.")
+                            ServerUiCaption("Штатная установка официальной 3x-ui с SQLite. Подлинность программных файлов проверяется перед заменой.")
                             ServerUiCaption("Возможен перерыв VPN; при ошибке может потребоваться ручное восстановление из резервной копии.")
                         }
                         ServerUiPrimaryButton("Продолжить", onInstall,
@@ -265,8 +265,8 @@ internal fun InstallerScreen(
                             trackColor = LocalXBoardPalette.current.line,
                         )
                         Text(
-                            if (state.options.operation == InstallOperation.FRESH) "Установка 3x-UI…"
-                            else "Обслуживание 3x-UI…",
+                            if (state.options.operation == InstallOperation.FRESH) "Установка 3x-ui…"
+                            else "Обслуживание 3x-ui…",
                             style = MaterialTheme.typography.bodyLarge,
                             color = LocalXBoardPalette.current.foreground,
                         )
@@ -316,7 +316,7 @@ internal fun InstallerScreen(
                         ServerUiBadge("Установка завершена")
                         ServerUiTitle(if (installed != null) "Панель добавлена" else "Ожидание данных панели")
                         if (installed != null) {
-                            ServerUiValue("Версия 3x-UI", state.availableVersion ?: "Проверена на сервере")
+                            ServerUiValue("Версия 3x-ui", state.availableVersion ?: "Проверена на сервере")
                             ServerUiValue("Адрес панели", safePanelOrigin(installed.panelUrl))
                             ServerUiValue("Порт панели", installed.panelPort.toString())
                             ServerUiValue("SSL", if (installed.sslMode == SslMode.DOMAIN) "Доменный сертификат" else "Сертификат на IP")
@@ -661,7 +661,7 @@ internal fun ServerUiSecureDialog(
         onDismissRequest = { if (!busy) onDismiss() },
         properties = DialogProperties(
             dismissOnBackPress = !busy, dismissOnClickOutside = !busy,
-            securePolicy = SecureFlagPolicy.SecureOn,
+            securePolicy = SecureFlagPolicy.Inherit,
         ),
     ) {
         SessionDialogGuard()

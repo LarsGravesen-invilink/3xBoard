@@ -146,7 +146,7 @@ internal fun SettingsMenu(
                             verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Spacer(Modifier.height(8.dp))
                         if (!stealthMode) {
-                            SettingsMenuEntry("Установка 3x-UI на VPS/VDS", BoardSymbol.Add) {
+                            SettingsMenuEntry("Установка 3x-ui на VPS/VDS", BoardSymbol.Add) {
                                 onDismiss()
                                 onInstall()
                             }

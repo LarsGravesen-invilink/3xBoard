@@ -1,5 +1,6 @@
 package app.invilink.xboard.ui
 
+import android.os.Message
 import android.webkit.CookieManager
 import android.webkit.JsPromptResult
 import android.webkit.WebChromeClient
@@ -64,7 +65,7 @@ internal fun NativePanelDialog(server: InstalledServer, onSaveCredentials: (Stri
         if (view != null && view.canGoBack()) view.goBack() else onDismiss()
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(
-        usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn,
+        usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.Inherit,
     )) {
         SessionDialogGuard()
         Surface(Modifier.fillMaxSize(), color = palette.background) {
@@ -73,7 +74,7 @@ internal fun NativePanelDialog(server: InstalledServer, onSaveCredentials: (Stri
                     BoardIconButton(onClick = onDismiss, modifier = Modifier.size(48.dp).semantics { contentDescription = "Закрыть панель" }) {
                         BoardIcon(BoardSymbol.Back, palette.foreground, 22.dp)
                     }
-                    Text("3x-UI", style = MaterialTheme.typography.titleLarge, color = palette.foreground)
+                    Text("3x-ui", style = MaterialTheme.typography.titleLarge, color = palette.foreground)
                 }
                 val message = when {
                     !secure -> "Нативный вход доступен только через HTTPS с действительным сертификатом."
@@ -82,21 +83,35 @@ internal fun NativePanelDialog(server: InstalledServer, onSaveCredentials: (Stri
                 }
                 if (message != null) Text(message, Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                     style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                if (secure && base != null) {
+                if (secure) {
+                    requireNotNull(base)
                     AndroidView(modifier = Modifier.weight(1f).fillMaxWidth(), factory = {
                         WebView(context).apply {
                             browser = this
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
+                            @Suppress("DEPRECATION")
+                            settings.databaseEnabled = true
+                            settings.javaScriptCanOpenWindowsAutomatically = true
+                            settings.setSupportMultipleWindows(true)
+                            settings.useWideViewPort = true
+                            settings.loadWithOverviewMode = true
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
                             settings.allowFileAccess = false
                             settings.allowContentAccess = false
-                            settings.javaScriptCanOpenWindowsAutomatically = false
-                            settings.setSupportMultipleWindows(false)
                             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                             @Suppress("DEPRECATION")
                             settings.saveFormData = false
                             CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
                             webChromeClient = object : WebChromeClient() {
+                                override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+                                    val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+                                    transport.webView = view
+                                    resultMsg.sendToTarget()
+                                    return true
+                                }
+
                                 override fun onJsPrompt(view: WebView, url: String, message: String, defaultValue: String, result: JsPromptResult): Boolean {
                                     if (message != promptMarker || !loginPage(url) || !loginPage(view.url.orEmpty())) return false
                                     val credentials = runCatching {
@@ -187,7 +202,7 @@ internal fun NativePanelDialog(server: InstalledServer, onSaveCredentials: (Stri
                 }) { Text("Сохранить") }
             },
             dismissButton = { TextButton(onClick = { credentialsToSave = null }) { Text("Не сохранять") } },
-            properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+            properties = DialogProperties(securePolicy = SecureFlagPolicy.Inherit),
         )
     }
     DisposableEffect(Unit) {

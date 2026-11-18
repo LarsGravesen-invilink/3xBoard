@@ -115,6 +115,21 @@ class CascadeServiceTest {
         assertTrue(ports.all { it in 20_000..45_000 })
     }
 
+    @Test fun wizardAmneziaWgInboundUsesGeneratedKeysAndEditableNetworkDefaults() {
+        val service = CascadeService(Gateway(), Journal())
+        val draft = service.amneziaWgInbound("AWG", "inbound-awg", 24567, "172.20.30.0", 1420, "9.9.9.9", "1.0.0.1")
+        val payload = draft.payload()
+        val server = JSONObject(payload.getString("settings")).getJSONObject("server")
+        assertEquals("amneziawg", payload.getString("protocol"))
+        assertEquals(24567, payload.getInt("port"))
+        assertEquals("172.20.30.0", server.getString("subnetIp"))
+        assertEquals(1420, server.getInt("mtu"))
+        assertEquals("9.9.9.9", server.getString("primaryDns"))
+        assertEquals("1.0.0.1", server.getString("secondaryDns"))
+        assertTrue(server.getString("privateKey").isNotBlank())
+        assertTrue(server.getString("publicKey").isNotBlank())
+    }
+
     @Test fun amneziaWgCascadeClientVerificationAllowsNormalizedNoncriticalFields() {
         val inbound = JSONObject("""{"protocol":"amneziawg","settings":{"clients":[{"email":"technical","publicKey":"public","preSharedKey":"psk","enable":true,"allowedIPs":["10.0.0.2/32"],"keepAlive":25}]}}""")
         val expected = JSONObject("""{"email":"technical","publicKey":"public","preSharedKey":"psk","enable":true,"allowedIPs":["0.0.0.0/0"],"keepAlive":"25"}""")
@@ -670,6 +685,7 @@ class CascadeServiceTest {
         for (transport in CascadeTransport.entries) {
             val gateway = Gateway()
             val result = CascadeService(gateway, Journal()).create(request().copy(transport = transport, fingerprint = "firefox"))
+            assertEquals(transport, result.transport)
             val entry = gateway.entry!!.payload()
             val exit = gateway.exit!!.payload()
             fun detail(payload: JSONObject): InboundDetail = InboundDetail(

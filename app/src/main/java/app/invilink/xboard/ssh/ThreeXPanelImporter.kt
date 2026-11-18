@@ -27,7 +27,7 @@ internal class ThreeXPanelImporter(private val connection: SshConnection) {
         if (result.exitCode != 0) {
             val reason = result.stderr.lineSequence().firstOrNull { it.startsWith("XBOARD_IMPORT:") }
                 ?.removePrefix("XBOARD_IMPORT:")?.take(300)
-            throw IllegalStateException(reason ?: "Не удалось обнаружить штатную работающую панель 3x-UI. Нужны root, python3 и SQLite; данные панели не изменялись.")
+            throw IllegalStateException(reason ?: "Не удалось обнаружить штатную работающую панель 3x-ui. Нужны root, python3 и SQLite; данные панели не изменялись.")
         }
         val data = JSONObject(result.stdout)
         val candidate = suppliedPanelPassword.ifEmpty { data.optString("panelPassword") }
@@ -38,7 +38,7 @@ internal class ThreeXPanelImporter(private val connection: SshConnection) {
                 withContext(Dispatchers.Default) { runCatching { OpenBSDBCrypt.checkPassword(hash, chars) }.getOrDefault(false) }
         } finally { chars.fill('\u0000') }
         require(suppliedPanelPassword.isEmpty() || passwordMatches) {
-            "Введённый пароль не совпадает с паролем первого администратора 3x-UI. Пароль на сервере не изменён."
+            "Введённый пароль не совпадает с паролем первого администратора 3x-ui. Пароль на сервере не изменён."
         }
         val panelPassword = if (passwordMatches) candidate else ""
         val url = PanelValidation.normalizeBaseUrl(data.getString("url"))
@@ -72,7 +72,7 @@ internal class ThreeXPanelImporter(private val connection: SshConnection) {
             pid_text = subprocess.check_output(['systemctl','show','x-ui.service','--property=MainPID','--value'], text=True).strip()
             need(pid_text.isdigit() and int(pid_text) > 1, 'Служба x-ui не запущена. Запустите панель и повторите подключение.')
             exe = os.readlink('/proc/' + pid_text + '/exe')
-            need(exe == '/usr/local/x-ui/x-ui', 'Нестандартная установка 3x-UI. Автоматическое изменение неизвестной установки запрещено.')
+            need(exe == '/usr/local/x-ui/x-ui', 'Нестандартная установка 3x-ui. Автоматическое изменение неизвестной установки запрещено.')
             env = dict(item.split(b'=',1) for item in open('/proc/' + pid_text + '/environ','rb').read().split(b'\0') if b'=' in item)
             need(env.get(b'XUI_DB_TYPE', b'sqlite') in (b'', b'sqlite') and not env.get(b'XUI_DB_DSN'), 'Автоимпорт поддерживает SQLite. Настройки другой базы не изменены.')
             folder = os.fsdecode(env.get(b'XUI_DB_FOLDER', b'/etc/x-ui'))
@@ -154,7 +154,7 @@ internal class ThreeXPanelImporter(private val connection: SshConnection) {
             if not token:
                 help_result = subprocess.run([exe,'setting','-h'], capture_output=True, text=True, timeout=10)
                 help_text = help_result.stdout + help_result.stderr
-                need('-tokenName' in help_text and '-tokenScope' in help_text, 'Эта версия 3x-UI не поддерживает отдельный именованный API-токен. Существующие токены не изменены; используйте Token API.')
+                need('-tokenName' in help_text and '-tokenScope' in help_text, 'Эта версия 3x-ui не поддерживает отдельный именованный API-токен. Существующие токены не изменены; используйте Token API.')
                 cli_env = os.environ.copy()
                 for key,value in env.items():
                     if key.startswith(b'XUI_'): cli_env[os.fsdecode(key)] = os.fsdecode(value)

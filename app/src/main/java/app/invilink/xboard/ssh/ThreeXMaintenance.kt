@@ -46,7 +46,7 @@ class ThreeXMaintenance(private val connection: SshConnection) {
             onProgress(InstallProgress(reportedPercent, "Проверка условий обслуживания.", true))
             val report = connection.preflight()
             if (!report.ready || !report.existingInstallation) {
-                throw MaintenanceException("Обслуживание требует root, поддерживаемую ОС и обнаруженную существующую 3x-UI. Новая установка не запускалась.")
+                throw MaintenanceException("Обслуживание требует root, поддерживаемую ОС и обнаруженную существующую 3x-ui. Новая установка не запускалась.")
             }
             val prerequisites = connection.execute(
                 "env -i HOME=/root LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/sh -c " + shellQuote(
@@ -182,7 +182,7 @@ class ThreeXMaintenance(private val connection: SshConnection) {
             "BUSY" to "На VPS выполняется другая задача обслуживания. Дождитесь её завершения и подключитесь заново.",
             "LAUNCH" to "Фоновый процесс обслуживания не удалось запустить или подтвердить.",
             "RESOURCES" to "Неизвестная ссылка на сертификат или ключ: разрешены только обычные root-файлы внутри /etc/x-ui либо единого дерева /root/cert, без symlink и внешних ссылок. Рабочая программа не заменялась.",
-            "UNSUPPORTED" to "Установка не соответствует штатной native-службе 3x-UI с SQLite в /etc/x-ui. Неизвестные файлы, форки, backend или окружение не изменены; понижение версии не выполнялось.",
+            "UNSUPPORTED" to "Установка не соответствует штатной native-службе 3x-ui с SQLite в /etc/x-ui. Неизвестные файлы, форки, backend или окружение не изменены; понижение версии не выполнялось.",
             "SOURCE" to "Программные файлы панели не совпали с проверенными официальными архивами. Неизвестная установка не изменена; новая установка поверх неё не запускалась.",
             "SERVICE" to "Неподдерживаемая служба или CLI: допускаются только штатные native x-ui.service и x-ui.sh соответствующего релиза. Пользовательские команды и служба не заменяются.",
             "BACKEND" to "Неподдерживаемое окружение/backend: обслуживание разрешено только для SQLite в /etc/x-ui без нестандартных XUI_* и других переменных службы.",

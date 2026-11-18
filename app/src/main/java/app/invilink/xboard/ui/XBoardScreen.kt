@@ -772,7 +772,7 @@ private fun ErrorText(error: String) {
     )
 }
 
-internal enum class BoardSymbol { Back, Appearance, Lock, Delete, Fingerprint, Settings, Add, AddCircle, Edit, Trash, Refresh, Power }
+internal enum class BoardSymbol { Back, Appearance, Lock, Delete, Fingerprint, Settings, Add, AddCircle, Edit, Trash, Refresh, Power, Copy, Share, Open, Document, Shield, Telegram }
 
 @Composable
 internal fun BoardIcon(symbol: BoardSymbol, color: Color, size: Dp = 24.dp) {
@@ -902,6 +902,55 @@ internal fun BoardIcon(symbol: BoardSymbol, color: Color, size: Dp = 24.dp) {
                 drawArc(color, 40f, 290f, false, point(4f, 4f), Size(16f * unit, 16f * unit), style = stroke)
                 line(19f, 3.5f, 19f, 8.5f)
                 line(14f, 8.5f, 19f, 8.5f)
+            }
+            BoardSymbol.Copy -> {
+                drawRoundRect(color, topLeft = point(8f, 3f), size = Size(11f * unit, 14f * unit), cornerRadius = CornerRadius(2f * unit), style = stroke)
+                drawRoundRect(color, topLeft = point(4f, 7f), size = Size(11f * unit, 14f * unit), cornerRadius = CornerRadius(2f * unit), style = stroke)
+            }
+            BoardSymbol.Share -> {
+                drawCircle(color, radius = 2.3f * unit, center = point(6f, 12f), style = stroke)
+                drawCircle(color, radius = 2.3f * unit, center = point(17f, 6f), style = stroke)
+                drawCircle(color, radius = 2.3f * unit, center = point(17f, 18f), style = stroke)
+                line(8f, 10.8f, 14.8f, 7.2f)
+                line(8f, 13.2f, 14.8f, 16.8f)
+            }
+            BoardSymbol.Open -> {
+                drawRoundRect(color, topLeft = point(4f, 7f), size = Size(13f * unit, 13f * unit), cornerRadius = CornerRadius(2f * unit), style = stroke)
+                line(12f, 4f, 20f, 4f)
+                line(20f, 4f, 20f, 12f)
+                line(20f, 4f, 10f, 14f)
+            }
+            BoardSymbol.Document -> {
+                drawRoundRect(color, topLeft = point(5f, 3f), size = Size(14f * unit, 18f * unit), cornerRadius = CornerRadius(2f * unit), style = stroke)
+                line(8f, 9f, 16f, 9f)
+                line(8f, 13f, 16f, 13f)
+                line(8f, 17f, 13f, 17f)
+            }
+            BoardSymbol.Shield -> {
+                val shield = Path().apply {
+                    moveTo(12f * unit, 3f * unit)
+                    lineTo(19f * unit, 6f * unit)
+                    lineTo(19f * unit, 11.5f * unit)
+                    cubicTo(19f * unit, 16.5f * unit, 16f * unit, 20f * unit, 12f * unit, 22f * unit)
+                    cubicTo(8f * unit, 20f * unit, 5f * unit, 16.5f * unit, 5f * unit, 11.5f * unit)
+                    lineTo(5f * unit, 6f * unit)
+                    close()
+                }
+                drawPath(shield, color, style = stroke)
+                line(8.5f, 12f, 10.8f, 14.3f)
+                line(10.8f, 14.3f, 15.8f, 9.3f)
+            }
+            BoardSymbol.Telegram -> {
+                val plane = Path().apply {
+                    moveTo(3f * unit, 11f * unit)
+                    lineTo(21f * unit, 3f * unit)
+                    lineTo(15.5f * unit, 21f * unit)
+                    lineTo(10.8f * unit, 14.2f * unit)
+                    close()
+                }
+                drawPath(plane, color, style = stroke)
+                line(10.8f, 14.2f, 21f, 3f)
+                line(10.8f, 14.2f, 8.8f, 18.3f)
             }
             BoardSymbol.AddCircle -> {
                 drawCircle(color, radius = 9f * unit, center = point(12f, 12f), style = stroke)

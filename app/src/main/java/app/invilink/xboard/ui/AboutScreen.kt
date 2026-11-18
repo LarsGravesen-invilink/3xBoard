@@ -89,7 +89,24 @@ SOFTWARE.""", color = palette.foreground, style = MaterialTheme.typography.bodyM
 }
 
 @Composable
-internal fun AboutScreen(onBack: () -> Unit, onAgreement: () -> Unit, onEmail: () -> Unit) {
+private fun AboutActionButton(title: String, symbol: BoardSymbol, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val palette = LocalXBoardPalette.current
+    BoardButton(
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 86.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = palette.soft, contentColor = palette.foreground),
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 12.dp),
+    ) {
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            BoardIcon(symbol, palette.foreground, 26.dp)
+            Text(title, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+internal fun AboutScreen(onBack: () -> Unit, onAgreement: () -> Unit, onEmail: () -> Unit, onTelegram: () -> Unit) {
     val palette = LocalXBoardPalette.current
     var licenseOpen by remember { mutableStateOf(false) }
     if (licenseOpen) {
@@ -146,7 +163,7 @@ internal fun AboutScreen(onBack: () -> Unit, onAgreement: () -> Unit, onEmail: (
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "Менеджер управления 3x-UI",
+                        "Менеджер управления 3x-ui",
                         modifier = Modifier.widthIn(max = 560.dp),
                         style = MaterialTheme.typography.bodyLarge,
                         color = palette.secondary,
@@ -177,33 +194,38 @@ internal fun AboutScreen(onBack: () -> Unit, onAgreement: () -> Unit, onEmail: (
                         ) {
                             Text("e-mail: igor@telyuk.ru", textAlign = TextAlign.Center)
                         }
-                        Text(
-                            "Разработка и поддержка: Игорь Николаевич Т.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = palette.secondary,
-                            textAlign = TextAlign.Center
-                        )
+                        BoardTextButton(
+                            onClick = onTelegram,
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = ButtonDefaults.textButtonColors(contentColor = palette.foreground),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 12.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                BoardIcon(BoardSymbol.Telegram, palette.foreground, 20.dp)
+                                Text("Telegram: @larsInvilink", textAlign = TextAlign.Center)
+                            }
+                        }
                     }
                 }
             }
-            BoardTextButton(
-                onClick = onAgreement,
-                modifier = Modifier.widthIn(max = 608.dp).fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 12.dp).heightIn(min = 52.dp),
-                shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = palette.foreground),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 14.dp)
+            Row(
+                modifier = Modifier.widthIn(max = 608.dp).fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Соглашение об использовании", textAlign = TextAlign.Center)
+                AboutActionButton(
+                    title = "Соглашение\nоб использовании",
+                    symbol = BoardSymbol.Document,
+                    onClick = onAgreement,
+                    modifier = Modifier.weight(1f),
+                )
+                AboutActionButton(
+                    title = "Лицензия\nи права",
+                    symbol = BoardSymbol.Shield,
+                    onClick = { licenseOpen = true },
+                    modifier = Modifier.weight(1f),
+                )
             }
-            BoardTextButton(
-                onClick = { licenseOpen = true },
-                modifier = Modifier.widthIn(max = 608.dp).fillMaxWidth()
-                    .padding(horizontal = 24.dp).heightIn(min = 52.dp),
-                shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = palette.foreground),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 14.dp)
-            ) { Text("Лицензия и права", textAlign = TextAlign.Center) }
         }
     }
 }

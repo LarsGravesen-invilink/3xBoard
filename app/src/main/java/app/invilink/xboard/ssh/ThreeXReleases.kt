@@ -69,7 +69,7 @@ internal object ThreeXReleases {
             connection.useCaches = false
             connection.setRequestProperty("User-Agent", "xBoard-release-check")
             connection.setRequestProperty("Accept", "application/vnd.github+json")
-            check(connection.responseCode == 200) { "Не удалось получить официальный релиз 3x-UI. Повторите проверку версии." }
+            check(connection.responseCode == 200) { "Не удалось получить официальный релиз 3x-ui. Повторите проверку версии." }
             return connection.inputStream.use { input ->
                 val output = ByteArrayOutputStream()
                 val buffer = ByteArray(8192)

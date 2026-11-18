@@ -40,6 +40,10 @@ data class SemVersion private constructor(
 internal fun isUpdateCoolingDown(declinedAt: Long, now: Long): Boolean =
     declinedAt > 0L && (now < declinedAt || now - declinedAt < 24 * 60 * 60 * 1000L)
 
+internal fun shouldRemindForRelease(lastVersion: String?, lastShownAt: Long, version: String, now: Long): Boolean =
+    lastVersion != version || lastShownAt <= 0L || now < lastShownAt ||
+        now - lastShownAt >= UpdateScheduler.LAUNCH_REMINDER_INTERVAL_MILLIS
+
 internal object UpdateUrls {
     private val hosts = setOf("github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com", "github-releases.githubusercontent.com")
     fun allowed(value: String): Boolean = try {

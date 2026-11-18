@@ -54,7 +54,7 @@ internal fun DeletionConfirmationDialog(
         properties = DialogProperties(
             dismissOnBackPress = true,
             dismissOnClickOutside = true,
-            securePolicy = SecureFlagPolicy.SecureOn,
+            securePolicy = SecureFlagPolicy.Inherit,
             usePlatformDefaultWidth = true
         )
     ) {

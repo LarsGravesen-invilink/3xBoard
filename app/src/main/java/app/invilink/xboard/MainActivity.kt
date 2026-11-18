@@ -36,6 +36,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
@@ -209,6 +210,10 @@ class MainActivity : FragmentActivity() {
             val protectionMenu by model.protectionMenu.collectAsStateWithLifecycle()
             val quickMenuEnabled by model.quickMenuEnabled.collectAsStateWithLifecycle()
             val cardMovementEnabled by model.cardMovementEnabled.collectAsStateWithLifecycle()
+            LaunchedEffect(state.unlockAllEnabled) {
+                if (state.unlockAllEnabled) window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                else window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
             LaunchedEffect(state.offline, state.stealthMode, state.primaryPinRequired) {
                 if (state.offline && !state.stealthMode && !state.primaryPinRequired) updateOfflineNotification()
                 else getSystemService(NotificationManager::class.java).cancel(OFFLINE_NOTIFICATION_ID)
@@ -248,9 +253,11 @@ class MainActivity : FragmentActivity() {
             var inboundWizardOpen by remember { mutableStateOf(false) }
             var inboundWizardOrigin by remember { mutableStateOf<String?>(null) }
             var cascadeWizardFromHome by remember { mutableStateOf(false) }
-            var cascadeManagementPanelId by remember { mutableStateOf<String?>(null) }
+            var cascadeManagementPanelId by rememberSaveable { mutableStateOf<String?>(null) }
             var cascadeTarget by remember { mutableStateOf<CascadeTarget?>(null) }
-            var cascadeOriginPanelId by remember { mutableStateOf<String?>(null) }
+            var cardReturnTarget by rememberSaveable { mutableStateOf(CardReturnTarget.HOME.name) }
+            var cardReturnHomePage by rememberSaveable { mutableStateOf(0) }
+            var cardReturnManagementPanelId by rememberSaveable { mutableStateOf<String?>(null) }
             var cascadeOpenError by remember { mutableStateOf<String?>(null) }
             var cascadeManagementFromHome by remember { mutableStateOf(false) }
             val cascade by model.cascade.collectAsStateWithLifecycle()
@@ -286,7 +293,7 @@ class MainActivity : FragmentActivity() {
                  )
                      val authorized = state.stage in authorizedStages
                       LaunchedEffect(authorized) { if (!authorized) inboundWizardOpen = false }
-                      LaunchedEffect(authorized) { if (!authorized) { routingPanelId = null; counterPanelId = null; apiAdministrationPanelId = null; sidebarAdministration = false; cascadePanelId = null; cascadeManagementPanelId = null; cascadeTarget = null; cascadeOriginPanelId = null } }
+                       LaunchedEffect(authorized) { if (!authorized) { routingPanelId = null; counterPanelId = null; apiAdministrationPanelId = null; sidebarAdministration = false; cascadePanelId = null; cascadeManagementPanelId = null; cascadeTarget = null; cardReturnTarget = CardReturnTarget.HOME.name; cardReturnHomePage = 0; cardReturnManagementPanelId = null } }
                       LaunchedEffect(cascadePanelId, cascade.busy, cascade.metadata?.step) {
                           if (authorized && cascadePanelId != null && !cascade.busy && cascade.metadata?.step == app.invilink.xboard.panels.CascadeStep.COMPLETE) {
                               val panelId = cascadePanelId
@@ -323,10 +330,15 @@ class MainActivity : FragmentActivity() {
                           }
                       }
                        val administrationChoices = state.panels.map { panel ->
-                           val host = model.administrationPanelConfig(panel.id)?.baseUrl?.let { runCatching { java.net.URI(it).host?.removeSurrounding("[", "]") }.getOrNull() }
-                           val domain = host?.takeIf { value -> !value.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) && ':' !in value }
-                           panel.id to app.invilink.xboard.panels.panelDisplayName(panel.name, panel.location?.ipAddress ?: host, domain)
-                       }
+                            val host = model.administrationPanelConfig(panel.id)?.baseUrl?.let { runCatching { java.net.URI(it).host?.removeSurrounding("[", "]") }.getOrNull() }
+                            val domain = host?.takeIf { value -> !value.matches(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}")) && ':' !in value }
+                            val name = app.invilink.xboard.panels.panelDisplayName(panel.name, panel.location?.ipAddress ?: host, domain)
+                            val country = panel.location?.let { location ->
+                                java.util.Locale("", location.countryCode).getDisplayCountry(java.util.Locale("ru")).ifBlank { location.countryName }
+                            }.orEmpty()
+                            val flag = panel.location?.countryFlag.orEmpty()
+                            panel.id to listOf(name, flag.takeIf { it.isNotBlank() }, country.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" ⦁ ")
+                        }
                       Box(Modifier.fillMaxSize().background(LocalXBoardPalette.current.background)) {
                  val screens: @Composable () -> Unit = {
                    val routingServer = if (authorized) routingPanelId?.let(model::administrationPanelConfig) else null
@@ -348,13 +360,14 @@ class MainActivity : FragmentActivity() {
                                if (!cascadeManagementFromHome) openAdministration(managementPanel)
                               cascadeManagementFromHome = false
                           },
-                          onOpenInbound = { target ->
-                              if (model.openCascadePanel(target.panelId)) {
-                                   cascadeTarget = target
-                                   cascadeOriginPanelId = managementPanel
-                                   cascadeManagementPanelId = null
-                              } else cascadeOpenError = "Не удалось открыть панель. Проверьте, что она доступна в приложении."
-                          },
+                           onOpenInbound = { target ->
+                               if (model.openCascadePanel(target.panelId)) {
+                                    cascadeTarget = target
+                                    cardReturnTarget = CardReturnTarget.CASCADE_MANAGEMENT.name
+                                    cardReturnManagementPanelId = managementPanel
+                                    cascadeManagementPanelId = null
+                               } else cascadeOpenError = "Не удалось открыть панель. Проверьте, что она доступна в приложении."
+                           },
                       )
                   } else if (routingServer != null) {
                      ServerRoutingScreen(routingServer) {
@@ -396,8 +409,8 @@ class MainActivity : FragmentActivity() {
                                   location = state.serverState.sshOnlyLocations[server.id],
                                   sshPanelStatus = when (state.serverState.sshOnlyPanelStatus[server.id]) {
                                       app.invilink.xboard.ssh.PanelInstallationState.ABSENT -> "На сервере не установлена 3x-ui"
-                                      app.invilink.xboard.ssh.PanelInstallationState.PRESENT -> "Обнаружена установка 3x-UI"
-                                      else -> "Состояние 3x-UI не подтверждено"
+                                      app.invilink.xboard.ssh.PanelInstallationState.PRESENT -> "Обнаружена установка 3x-ui"
+                                      else -> "Состояние 3x-ui не подтверждено"
                                   })
                           },
                           refreshing = state.panelRefreshing,
@@ -405,7 +418,13 @@ class MainActivity : FragmentActivity() {
                         selectedPage = state.selectedPage,
                          onPageChanged = model::selectPage,
                          onVisiblePanelsChanged = model::setVisiblePanels,
-                           onOpenPanel = { cascadeTarget = null; model.openPanel(it) },
+                            onOpenPanel = { id, page ->
+                                cascadeTarget = null
+                                cardReturnTarget = CardReturnTarget.HOME.name
+                                cardReturnHomePage = page
+                                cardReturnManagementPanelId = null
+                                model.openPanel(id)
+                            },
                            offline = state.offline,
                             onServerSettings = { id ->
                                 sidebarAdministration = false
@@ -440,13 +459,15 @@ class MainActivity : FragmentActivity() {
                             unlockAllEnabled = state.unlockAllEnabled,
                             cascades = if (state.stealthMode) emptyList() else cascade.history,
                             cascadeHealth = if (state.stealthMode) emptyMap() else cascade.health,
-                           onOpenCascade = { item ->
-                               val id = item.entryInboundId
-                               if (id != null && model.openCascadePanel(item.entryPanelId)) {
-                                   cascadeTarget = CascadeTarget(item.entryPanelId, id, item.entryInboundName, item.entryClientName, item.entryTag)
-                                   cascadeOriginPanelId = null
-                               }
-                           },
+                             onOpenCascade = { item, page ->
+                                val id = item.entryInboundId
+                                if (id != null && model.openCascadePanel(item.entryPanelId)) {
+                                    cascadeTarget = CascadeTarget(item.entryPanelId, id, item.entryInboundName, item.entryClientName, item.entryTag)
+                                    cardReturnTarget = CardReturnTarget.HOME.name
+                                    cardReturnHomePage = page
+                                    cardReturnManagementPanelId = null
+                                }
+                            },
                            onCascadeSettings = { item -> cascadeManagementFromHome = true; cascadeManagementPanelId = item.entryPanelId; model.refreshCascadeJournal() },
                            onDeleteCascade = model::deleteCascade,
                            loadCascadeInbound = model::cascadeInboundSummary,
@@ -490,16 +511,26 @@ class MainActivity : FragmentActivity() {
                     }
                       Stage.PANEL_DETAIL -> {
                            val closeDetails = {
-                               if (model.closePanel()) {
-                                   cascadeTarget = null
-                                   cascadeOriginPanelId?.let { origin ->
-                                       cascadeManagementPanelId = origin
-                                       cascadeOriginPanelId = null
-                                       model.refreshCascadeJournal()
-                                   }
-                               }
-                               Unit
-                           }
+                               val returnTargetName = cardReturnTarget
+                               val returnTarget = CardReturnTarget.entries.firstOrNull { it.name == returnTargetName } ?: CardReturnTarget.HOME
+                                val managementOrigin = cardReturnManagementPanelId
+                                val homePage = cardReturnHomePage
+                                 if (model.closePanel()) {
+                                    cascadeTarget = null
+                                     cardReturnTarget = CardReturnTarget.HOME.name
+                                     cardReturnHomePage = 0
+                                     cardReturnManagementPanelId = null
+                                     when (returnTarget) {
+                                        CardReturnTarget.CASCADE_MANAGEMENT -> managementOrigin?.let { origin ->
+                                            cascadeManagementPanelId = origin
+                                            model.refreshCascadeJournal()
+                                        }
+                                         CardReturnTarget.INBOUND_WIZARD -> inboundWizardOpen = true
+                                         CardReturnTarget.HOME -> model.selectPage(homePage)
+                                     }
+                                }
+                                Unit
+                            }
                            BackHandler {
                                if (state.deletionTarget != null) model.dismissDeletion()
                                else if (state.selectedClient != null) model.closeClient() else closeDetails()
@@ -507,7 +538,7 @@ class MainActivity : FragmentActivity() {
                            PanelDetailsScreen(state, closeDetails, model::refreshInboundsBySwipe, model::toggleInbound,
                               model::addClient, model::openClient, model::addInbound, model::editInbound,
                                 model::editClient, model::requestDeleteInbound, model::requestDeleteClient, model::setClientEnabled,
-                                  cascadeTarget = cascadeTarget, cascadeClientsOnly = cascadeTarget != null && cascadeOriginPanelId == null,
+                                   cascadeTarget = cascadeTarget, cascadeClientsOnly = cascadeTarget != null && cardReturnTarget == CardReturnTarget.HOME.name,
                                   cascadeDirection = cascade.history.firstOrNull { it.entryPanelId == cascadeTarget?.panelId && it.entryInboundId == cascadeTarget?.inboundId }?.let { item ->
                                       "${state.panels.firstOrNull { it.id == item.entryPanelId }?.location?.let { java.util.Locale("", it.countryCode).getDisplayCountry(java.util.Locale("ru")).ifBlank { it.countryName } } ?: "Неизвестно"} → ${state.panels.firstOrNull { it.id == item.exitPanelId }?.location?.let { java.util.Locale("", it.countryCode).getDisplayCountry(java.util.Locale("ru")).ifBlank { it.countryName } } ?: "Неизвестно"}"
                                   }.orEmpty(),
@@ -609,13 +640,20 @@ class MainActivity : FragmentActivity() {
                        Stage.ABOUT -> AboutScreen(
                            onBack = model::backFromSettingsPage,
                            onAgreement = model::openAgreement,
-                           onEmail = {
-                               try {
-                                   startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:igor@telyuk.ru")))
-                               } catch (_: android.content.ActivityNotFoundException) {
-                                   android.widget.Toast.makeText(this@MainActivity, "Почтовое приложение не найдено", android.widget.Toast.LENGTH_SHORT).show()
-                               }
-                           },
+                            onEmail = {
+                                try {
+                                    startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:igor@telyuk.ru")))
+                                } catch (_: android.content.ActivityNotFoundException) {
+                                    android.widget.Toast.makeText(this@MainActivity, "Почтовое приложение не найдено", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            onTelegram = {
+                                try {
+                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/larsInvilink")))
+                                } catch (_: android.content.ActivityNotFoundException) {
+                                    android.widget.Toast.makeText(this@MainActivity, "Приложение для открытия ссылки не найдено", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            },
                        )
                        else -> XBoardScreen(
                         model = state,
@@ -635,19 +673,23 @@ class MainActivity : FragmentActivity() {
                  if (authorized && inboundWizardOpen && !state.stealthMode) {
                      Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                          InboundWizardScreen(panels = state.panels, initialPanelId = inboundWizardOrigin.orEmpty(),
-                             onBack = {
-                                 inboundWizardOpen = false
-                                 val origin = inboundWizardOrigin
+                              onBack = {
+                                  inboundWizardOpen = false
+                                     cardReturnTarget = CardReturnTarget.HOME.name
+                                     cardReturnHomePage = state.selectedPage
+                                     cardReturnManagementPanelId = null
+                                  val origin = inboundWizardOrigin
                                  inboundWizardOrigin = null
                                  model.refreshPanels(visual = false)
                                  if (origin != null) openAdministration(origin)
                              },
-                             onOpen = { id, inboundId ->
-                                 if (model.openWizardInbound(id, inboundId)) {
-                                     inboundWizardOpen = false
-                                     inboundWizardOrigin = null
-                                 }
-                             })
+                              onOpen = { id, inboundId ->
+                                  if (model.openWizardInbound(id, inboundId)) {
+                                      inboundWizardOpen = false
+                                      cardReturnTarget = CardReturnTarget.INBOUND_WIZARD.name
+                                      cardReturnManagementPanelId = null
+                                  }
+                              })
                      }
                  } else if (authorized && cascadePanelId != null) {
                      val panelId = cascadePanelId!!
@@ -818,7 +860,7 @@ class MainActivity : FragmentActivity() {
                                     Text("Управление SSH-подключением")
                                     androidx.compose.material3.TextButton(enabled = !serverState.busy, onClick = {
                                         model.openSshOnlyInstaller(ssh.id); sshOnlyControlId = null
-                                    }) { Text("Установить 3x-UI") }
+                                    }) { Text("Установить 3x-ui") }
                                 } },
                                 confirmButton = { androidx.compose.material3.TextButton(onClick = {
                                     manager.openSshOnlyConsole(ssh.id); sshOnlyControlId = null
@@ -858,8 +900,8 @@ class MainActivity : FragmentActivity() {
                         serverState.sshOnlyCandidate?.let {
                          androidx.compose.material3.AlertDialog(
                              onDismissRequest = { },
-                             title = { Text("3x-UI не установлена") },
-                             text = { Text("На этом сервере не установлена панель 3x-UI. Будет добавлено подключение по SSH. Хотите ли Вы установить 3x-UI на этот сервер прямо сейчас?") },
+                             title = { Text("3x-ui не установлена") },
+                             text = { Text("На этом сервере не установлена панель 3x-ui. Будет добавлено подключение по SSH. Хотите ли Вы установить 3x-ui на этот сервер прямо сейчас?") },
                              confirmButton = { androidx.compose.material3.TextButton(enabled = !serverState.busy, onClick = { manager.confirmSshOnlyCandidate(true) }) { Text("Установить сейчас") } },
                              dismissButton = { androidx.compose.material3.TextButton(enabled = !serverState.busy, onClick = { manager.confirmSshOnlyCandidate(false) }) { Text("Позже") } },
                          )
@@ -1102,6 +1144,12 @@ class MainActivity : FragmentActivity() {
         const val OFFLINE_CHANNEL_ID = "connectivity_status"
         const val OFFLINE_NOTIFICATION_ID = 3101
     }
+}
+
+private enum class CardReturnTarget {
+    HOME,
+    CASCADE_MANAGEMENT,
+    INBOUND_WIZARD,
 }
 
 @Composable

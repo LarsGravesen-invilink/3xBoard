@@ -147,7 +147,7 @@ internal fun HomeScreen(
     selectedPage: Int,
     onPageChanged: (Int) -> Unit,
     onVisiblePanelsChanged: (Int, Set<String>) -> Unit,
-    onOpenPanel: (String) -> Unit = {},
+    onOpenPanel: (String, Int) -> Unit = { _, _ -> },
     offline: Boolean = false,
     onServerSettings: (String) -> Unit = {},
     quickAccessEnabled: Boolean = true,
@@ -168,7 +168,7 @@ internal fun HomeScreen(
     unlockAllEnabled: Boolean = false,
     cascades: List<CascadeMetadata> = emptyList(),
     cascadeHealth: Map<String, CascadeHealth> = emptyMap(),
-    onOpenCascade: (CascadeMetadata) -> Unit = {},
+    onOpenCascade: (CascadeMetadata, Int) -> Unit = { _, _ -> },
     onCascadeSettings: (CascadeMetadata) -> Unit = {},
     onDeleteCascade: (CascadeMetadata) -> Unit = {},
     loadCascadeInbound: suspend (CascadeMetadata) -> app.invilink.xboard.panels.InboundDetail? = { null },
@@ -548,7 +548,7 @@ private fun PanelDeck(
     allCascades: List<CascadeMetadata>,
     cascadeHealth: Map<String, CascadeHealth>,
     loadPanelInbounds: suspend (String) -> List<app.invilink.xboard.panels.InboundDetail>?,
-    onOpenCascade: (CascadeMetadata) -> Unit,
+    onOpenCascade: (CascadeMetadata, Int) -> Unit,
     onCascadeSettings: (CascadeMetadata) -> Unit,
     onDeleteCascade: (CascadeMetadata) -> Unit,
     loadCascadeInbound: suspend (CascadeMetadata) -> app.invilink.xboard.panels.InboundDetail?,
@@ -561,7 +561,7 @@ private fun PanelDeck(
     onVisiblePanelsChanged: (Int, Set<String>) -> Unit,
     onRefresh: () -> Unit,
     onAddPanel: () -> Unit,
-    onOpenPanel: (String) -> Unit,
+    onOpenPanel: (String, Int) -> Unit,
     onServerSettings: (String) -> Unit,
     cardMovementEnabled: Boolean,
     modifier: Modifier = Modifier,
@@ -588,7 +588,7 @@ private fun PanelDeck(
     val firstPage = minPage - if (extraLeft) 1 else 0
     val lastPage = maxPage + if (extraRight) 1 else 0
     val pageCount = lastPage - firstPage + 1
-    val initialPage = (-firstPage).coerceIn(0, pageCount - 1)
+    val initialPage = (selectedPage - firstPage).coerceIn(0, pageCount - 1)
     val pager = rememberPagerState(initialPage = initialPage, pageCount = { pageCount })
     val scope = rememberCoroutineScope()
     var dragging by remember { mutableStateOf<String?>(null) }
@@ -782,7 +782,7 @@ private fun PanelPage(
     allCascades: List<CascadeMetadata>,
     cascadeHealth: Map<String, CascadeHealth>,
     loadPanelInbounds: suspend (String) -> List<app.invilink.xboard.panels.InboundDetail>?,
-    onOpenCascade: (CascadeMetadata) -> Unit,
+    onOpenCascade: (CascadeMetadata, Int) -> Unit,
     onCascadeSettings: (CascadeMetadata) -> Unit,
     onDeleteCascade: (CascadeMetadata) -> Unit,
     loadCascadeInbound: suspend (CascadeMetadata) -> app.invilink.xboard.panels.InboundDetail?,
@@ -800,7 +800,7 @@ private fun PanelPage(
     selectedPage: Int,
     onVisiblePanelsChanged: (Int, Set<String>) -> Unit,
     onAddPanel: () -> Unit,
-    onOpenPanel: (String) -> Unit,
+    onOpenPanel: (String, Int) -> Unit,
     onServerSettings: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -892,9 +892,9 @@ private fun PanelPage(
                              Box(cardModifier) {
                                  if (cascade != null) {
                                      CascadeHomeCard(cascade, panels, refreshResult, cascadeHealth[cascade.id], loadCascadeInbound, loadCascadeLatency, cachedCascadeMetrics,
-                                         { onOpenCascade(cascade) }, { onCascadeSettings(cascade) }, { onDeleteCascade(cascade) }, Modifier.fillMaxSize())
+                                          { onOpenCascade(cascade, page) }, { onCascadeSettings(cascade) }, { onDeleteCascade(cascade) }, Modifier.fillMaxSize())
                                  } else if (panel != null) {
-                                     PanelCard(panel, refreshResult, { onOpenPanel(panel.id) }, onServerSettings,
+                                     PanelCard(panel, refreshResult, { onOpenPanel(panel.id, page) }, onServerSettings,
                                          Modifier.fillMaxSize(), allCascades, loadPanelInbounds)
                                  }
                              }
@@ -1084,13 +1084,13 @@ private fun CascadeHomeCard(cascade: CascadeMetadata, panels: List<PanelSummary>
                 AvailabilityDot(cascadeAvailability, availability)
                 Text(availability, color = palette.secondary, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            HomeMetricDivider()
+            Text("⇓ ${entry?.metrics?.latencyMillis?.let { "$it мс" } ?: "—"}", Modifier.weight(1f), color = latencyColor(entry?.metrics?.latencyMillis), fontSize = 11.sp, maxLines = 1)
+            HomeMetricDivider()
+            Text("⇑ ${exit?.metrics?.latencyMillis?.let { "$it мс" } ?: "—"}", Modifier.weight(0.9f), color = latencyColor(exit?.metrics?.latencyMillis), fontSize = 11.sp, maxLines = 1)
             if (!udpCascade) {
                 HomeMetricDivider()
-                Text("API ${entry?.metrics?.latencyMillis?.let { "$it мс" } ?: "—"}", Modifier.weight(1f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
-                HomeMetricDivider()
-                Text("↑ ${exit?.metrics?.latencyMillis?.let { "$it мс" } ?: "—"}", Modifier.weight(0.9f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
-                HomeMetricDivider()
-                Text("↕ ${interNodeLatency?.let { "$it мс" } ?: "—"}", Modifier.weight(0.9f), color = palette.secondary, fontSize = 11.sp, maxLines = 1)
+                Text("↕ ${interNodeLatency?.let { "$it мс" } ?: "—"}", Modifier.weight(0.9f), color = latencyColor(interNodeLatency), fontSize = 11.sp, maxLines = 1)
             }
         }
         Row(Modifier.padding(start = 12.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1165,7 +1165,7 @@ private fun PanelCard(
                     style = MaterialTheme.typography.bodySmall, color = palette.secondary, textAlign = TextAlign.Center)
             }
             Spacer(Modifier.height(8.dp))
-            Text(panel.sshPanelStatus ?: "Состояние 3x-UI не подтверждено", style = MaterialTheme.typography.bodySmall,
+            Text(panel.sshPanelStatus ?: "Состояние 3x-ui не подтверждено", style = MaterialTheme.typography.bodySmall,
                 color = palette.secondary, textAlign = TextAlign.Center)
         }
         return
@@ -1295,8 +1295,10 @@ private fun PanelCard(
                       Text(availability, color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                    }
                    HomeMetricDivider()
-                   Text("API $latency", Modifier.weight(1.35f).semantics { contentDescription = "Время ответа API: $latency" },
-                      color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                   Row(Modifier.weight(1.35f).semantics { contentDescription = "Время ответа API: $latency" }, verticalAlignment = Alignment.CenterVertically) {
+                       Text("API ", color = palette.secondary, fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1)
+                       Text(latency, color = latencyColor(metrics.latencyMillis), fontSize = 11.sp, lineHeight = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                   }
                   HomeMetricDivider()
                   MetricItem(MetricIcon.Cpu, formatCpu(metrics.cpuPercent), "CPU: ${formatCpu(metrics.cpuPercent)}", Modifier.weight(1.35f), 11.sp)
               }

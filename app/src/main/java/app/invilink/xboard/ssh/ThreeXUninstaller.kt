@@ -5,7 +5,7 @@ import org.json.JSONObject
 internal class UninstallException(code: String, stage: String, panelId: String) : IllegalStateException(
     when (code) {
         "ROOT" -> "Нужен вход по SSH под root."
-        "OWNERSHIP" -> "Нет подтверждённой установки 3xBoard для этой панели; чужая 3x-UI не удаляется."
+        "OWNERSHIP" -> "Нет подтверждённой установки 3xBoard для этой панели; чужая 3x-ui не удаляется."
         "TARGET" -> "Порт, путь или база не совпадают с выбранной панелью."
         "PARENT" -> "Родительский каталог перенаправлен или доступен для чужой записи; проверьте ${uninstallParentPath(stage)}."
         "ENVIRONMENT" -> "В /etc/default/x-ui или /etc/sysconfig/x-ui есть неизвестные настройки. Оставьте только XUI_DB_TYPE=sqlite либо удалите файл вручную после проверки."
@@ -16,8 +16,8 @@ internal class UninstallException(code: String, stage: String, panelId: String) 
         "DB_LAYOUT" -> "База x-ui.db или её служебный файл перенаправлен; проверьте /etc/x-ui."
         "MOUNT" -> "В удаляемом каталоге обнаружена точка монтирования; сначала отключите её вручную."
         "SERVICE" -> "Не удалось подтвердить службу x-ui выбранной панели или выполнить команду systemd."
-        "FOREIGN" -> "Каталоги 3x-UI используются другой службой; нужна ручная проверка."
-        "PROCESS" -> "Не подтверждено отсутствие посторонних или оставшихся процессов 3x-UI/xRay."
+        "FOREIGN" -> "Каталоги 3x-ui используются другой службой; нужна ручная проверка."
+        "PROCESS" -> "Не подтверждено отсутствие посторонних или оставшихся процессов 3x-ui/xRay."
         "BUSY" -> "Установка или обслуживание ещё выполняется; повторите после завершения."
         "RECEIPT" -> "Запись удаления повреждена или относится к другой панели; нужна ручная проверка задания."
         "REAPPEARED" -> "После подтверждённого удаления файлы панели появились снова; повторное удаление запрещено."
@@ -51,7 +51,7 @@ internal class ThreeXUninstaller(private val connection: SshConnection) {
             .put("port", server.panelPort.toString())
             .put("path", server.secretPath)
             .put("url", server.panelUrl)
-        check(!server.imported) { "Удаление 3x-UI с сервера доступно только если 3x-UI было установлено через 3xBoard." }
+        check(!server.imported) { "Удаление 3x-ui с сервера доступно только если 3x-ui было установлено через 3xBoard." }
         val script = ("export XBOARD_EXPECTED=${shellQuote(expected.toString())}\n" +
             "exec /usr/bin/python3 -I - <<'XBOARD_NATIVE_REMOVE'\n" + SIMPLE_REMOVE + "\nXBOARD_NATIVE_REMOVE\n")
             .toByteArray(Charsets.UTF_8)

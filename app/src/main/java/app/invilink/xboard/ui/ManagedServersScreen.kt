@@ -35,8 +35,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -50,6 +48,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.invilink.xboard.XBoardViewModel
 import app.invilink.xboard.CascadeInboundSelection
+import app.invilink.xboard.InboundWizardProtocol
+import app.invilink.xboard.InboundWizardRequest
 import app.invilink.xboard.panels.CascadeTransport
 import app.invilink.xboard.panels.CascadeProtocol
 import app.invilink.xboard.panels.cascadeFlag
@@ -120,7 +120,7 @@ internal fun ManagedServersScreen(
         if (servers.isEmpty()) {
             ServerUiCard {
                 ServerUiTitle("Здесь появятся ваши серверы")
-                ServerUiCaption("Установите 3x-UI, чтобы добавить сервер.")
+                ServerUiCaption("Установите 3x-ui, чтобы добавить сервер.")
             }
         } else if (servers.size == 1) {
             ServerUiCaption("Серверов: 1")
@@ -162,7 +162,7 @@ private fun ManagedServerCard(
                 ServerUiBadge("SSH")
                 Text(
                     summary?.let { app.invilink.xboard.panels.panelDisplayName(it.name, it.location?.ipAddress ?: panelHost, panelHost) }
-                        ?: panelHost ?: "Сервер 3x-UI",
+                        ?: panelHost ?: "Сервер 3x-ui",
                     style = MaterialTheme.typography.titleLarge, color = palette.foreground,
                 )
             }
@@ -231,7 +231,7 @@ internal fun ServerControlDialog(
     ServerUiScreen(onBack = onDismiss, backEnabled = !busy, title = "Администрирование") {
         if (selectablePanels == null) ServerUiValue("SSH-адрес", server.sshHost)
         else {
-            ServerUiCaption("Выберите подключение, которое хотите администрировать")
+            AdministrationServerPrompt()
             AdministrationPanelSelector(selectablePanels, server.panelId, busy, onSelectServer)
         }
         error?.let { ServerUiError(it) }
@@ -242,7 +242,7 @@ internal fun ServerControlDialog(
                 ServerUiCaption("Выполняется действие…")
             }
         }
-        ServerUiTitle("3x-UI")
+        ServerUiTitle("3x-ui")
         ServerControlItem(
             "Мастер каскада", "Создание подключения из цепочки двух выбранных серверов.",
             BoardSymbol.Settings, enabled = !busy,
@@ -260,7 +260,7 @@ internal fun ServerControlDialog(
             BoardSymbol.Settings, enabled = !busy,
         ) { onRouting() }
         ServerControlItem(
-            "Доступ и данные 3x-UI", "Адрес и данные доступа.",
+            "Доступ и данные 3x-ui", "Адрес и данные доступа.",
             BoardSymbol.Settings, enabled = !busy,
         ) { onAction(ServerControlAction.SHOW_PANEL_SETTINGS) }
         ServerControlItem("Управление счётчиками", "Сброс трафика выбранных инбаундов.", BoardSymbol.Settings, enabled = !busy, onClick = onCounters)
@@ -283,13 +283,13 @@ internal fun ServerControlDialog(
         ) { onAction(ServerControlAction.RENAME) }
         ServerControlItem(
             "Удалить сервер из 3xBoard",
-            "Только из 3xBoard; 3x-UI продолжит работать.",
+            "Только из 3xBoard; 3x-ui продолжит работать.",
             BoardSymbol.Trash, destructive = true, enabled = !busy,
         ) { onAction(ServerControlAction.REMOVE_LOCAL) }
         if (!server.imported) {
             ServerControlItem(
                 "Удалить и очистить VPS/VDS",
-                "Необратимое удаление 3x-UI и её базы данных без резервной копии; VPN отключится. ОС, другие сервисы и общие сертификаты сохранятся.",
+                "Необратимое удаление 3x-ui и её базы данных без резервной копии; VPN отключится. ОС, другие сервисы и общие сертификаты сохранятся.",
                 BoardSymbol.Trash, destructive = true, enabled = !busy,
             ) { onAction(ServerControlAction.UNINSTALL_AND_REMOVE) }
         }
@@ -361,12 +361,12 @@ internal fun ServerConsoleScreen(
                 if (outputTruncated) Text("Старый вывод срезан; полная история не сохраняется.",
                     style = MaterialTheme.typography.labelSmall, color = palette.secondary)
                 Surface(modifier = Modifier.fillMaxWidth().weight(1f), shape = RoundedCornerShape(18.dp),
-                    color = palette.soft,
-                    border = BorderStroke(1.dp, palette.line)) {
+                    color = if (active) Color.Black else palette.soft,
+                    border = BorderStroke(1.dp, if (active) Color(0xFF363636) else palette.line)) {
                     Box(Modifier.fillMaxSize().verticalScroll(resultScroll).padding(14.dp)) {
                         SelectionContainer {
                             Text(renderedOutput, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                color = palette.foreground)
+                                color = if (active) Color(0xFFE8E8E8) else palette.foreground)
                         }
                     }
                 }
@@ -498,21 +498,46 @@ internal fun ConsoleNoOutputDialog(onDismiss: () -> Unit) {
 }
 
 @Composable
+private fun AdministrationServerPrompt() {
+    val palette = LocalXBoardPalette.current
+    Text(
+        "Выберите сервер с которым хотите работать",
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = palette.foreground,
+    )
+}
+
+@Composable
 private fun AdministrationPanelSelector(choices: List<Pair<String, String>>, selected: String, busy: Boolean, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     val palette = LocalXBoardPalette.current
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val menuWidth = maxWidth
-        Surface(onClick = { expanded = true }, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
-            shape = RoundedCornerShape(14.dp), color = palette.soft, border = BorderStroke(1.dp, palette.line)) {
+        Surface(
+            onClick = { expanded = true },
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+            shape = RoundedCornerShape(14.dp),
+            color = palette.soft,
+            border = BorderStroke(1.dp, palette.line),
+        ) {
             Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(choices.firstOrNull { it.first == selected }?.second.orEmpty(), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    choices.firstOrNull { it.first == selected }?.second.orEmpty(),
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 Text("▾", style = MaterialTheme.typography.titleLarge)
             }
         }
         BoardDropdownMenu(expanded = expanded && !busy, onDismissRequest = { expanded = false }, modifier = Modifier.width(menuWidth)) {
-            choices.forEach { (id, label) -> BoardDropdownMenuItem(text = { Text(label, style = MaterialTheme.typography.titleMedium) },
-                onClick = { expanded = false; onSelect(id) }) }
+            choices.forEach { (id, label) ->
+                BoardDropdownMenuItem(
+                    text = { Text(label, style = MaterialTheme.typography.titleMedium) },
+                    onClick = { expanded = false; onSelect(id) },
+                )
+            }
         }
     }
 }
@@ -545,12 +570,12 @@ internal fun ApiPanelControlDialog(
             }, onDismiss = { confirming = false })
     }
     ServerUiScreen(onBack = onDismiss, backEnabled = !busy && !confirming, title = "Администрирование") {
-            ServerUiCaption("Выберите подключение, которое хотите администрировать")
+            AdministrationServerPrompt()
             AdministrationPanelSelector(choices, panel.id, busy, onSelect)
             ServerUiCaption("Подключение по API. Действия, требующие SSH, недоступны.")
             error?.let { ServerUiError(it) }
             message?.let { ServerUiNotice("Администрирование", it) }
-            ServerUiTitle("3x-UI")
+            ServerUiTitle("3x-ui")
             ServerControlItem("Мастер каскада", "Создание подключения из цепочки двух выбранных серверов.", BoardSymbol.Settings, enabled = !busy, onClick = onCascade)
             ServerControlItem("Мастер инбаундов", "Создание инбаундов на панели.", BoardSymbol.Settings, enabled = !busy, onClick = onInboundWizard)
             cascadeJournalError?.let { ServerUiError(it) }
@@ -671,35 +696,73 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
     val scope = rememberCoroutineScope()
     var step by rememberSaveable { mutableStateOf(0) }
     var panelId by rememberSaveable { mutableStateOf(initialPanelId) }
-    var tcp by rememberSaveable { mutableStateOf(false) }
-    var xhttp by rememberSaveable { mutableStateOf(false) }
+    var protocolName by rememberSaveable { mutableStateOf(InboundWizardProtocol.VLESS_REALITY.name) }
+    val protocol = InboundWizardProtocol.valueOf(protocolName)
+    var vlessTransport by rememberSaveable { mutableStateOf("TCP") }
     var tcpPort by rememberSaveable { mutableStateOf("") }
     var xhttpPort by rememberSaveable { mutableStateOf("") }
+    var port by rememberSaveable { mutableStateOf("") }
+    var serverName by rememberSaveable { mutableStateOf("google.com") }
+    var fingerprint by rememberSaveable { mutableStateOf("chrome") }
+    var certificateFile by rememberSaveable { mutableStateOf("") }
+    var keyFile by rememberSaveable { mutableStateOf("") }
+    var hysteriaAlpn by rememberSaveable { mutableStateOf("h3") }
+    var awgMtu by rememberSaveable { mutableStateOf("1280") }
+    var awgPrimaryDns by rememberSaveable { mutableStateOf("8.8.8.8") }
+    var awgSecondaryDns by rememberSaveable { mutableStateOf("1.1.1.1") }
+    var shadowsocksMethod by rememberSaveable { mutableStateOf("2022-blake3-aes-256-gcm") }
     var name by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue("")) }
-    var suggestedTcp by remember { mutableStateOf("") }
-    var suggestedXhttp by remember { mutableStateOf("") }
     var progress by remember { mutableStateOf(0) }
     var progressLabel by remember { mutableStateOf("") }
     var firstCreatedId by remember { mutableStateOf<Long?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var loadingPorts by remember { mutableStateOf(false) }
+    var loadingDefaults by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var done by remember { mutableStateOf(false) }
     val panel = panels.firstOrNull { it.id == panelId }
-    LaunchedEffect(panelId) {
-        if (panelId.isNotBlank()) {
-            loadingPorts = true
-            try {
-                val ports = model.wizardSuggestedPorts(panelId)
-                suggestedTcp = ports.getOrNull(0)?.toString().orEmpty()
-                suggestedXhttp = ports.getOrNull(1)?.toString().orEmpty()
-                tcpPort = if (tcp) suggestedTcp else ""
-                xhttpPort = if (xhttp) suggestedXhttp else ""
-                error = null
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { error = failure.message ?: "Не удалось проверить порты панели." }
-            finally { loadingPorts = false }
-        }
+    val requestedPortCount = if (protocol == InboundWizardProtocol.VLESS_REALITY && vlessTransport == "TCP и XHTTP") 2 else 1
+    LaunchedEffect(panelId, protocol, vlessTransport) {
+        if (panelId.isBlank()) return@LaunchedEffect
+        loadingDefaults = true
+        try {
+            val ports = model.wizardSuggestedPorts(panelId, protocol, requestedPortCount)
+            if (protocol == InboundWizardProtocol.VLESS_REALITY) {
+                tcpPort = if (vlessTransport in setOf("TCP", "TCP и XHTTP")) ports.getOrNull(0)?.toString().orEmpty() else ""
+                xhttpPort = if (vlessTransport == "XHTTP") ports.getOrNull(0)?.toString().orEmpty()
+                    else if (vlessTransport == "TCP и XHTTP") ports.getOrNull(1)?.toString().orEmpty() else ""
+                serverName = "google.com"
+                fingerprint = "chrome"
+            } else {
+                port = ports.firstOrNull()?.toString().orEmpty()
+                if (protocol in setOf(InboundWizardProtocol.HYSTERIA2, InboundWizardProtocol.TROJAN)) {
+                    val defaults = model.wizardInboundPanelDefaults(panelId)
+                    certificateFile = defaults.certificateFile
+                    keyFile = defaults.keyFile
+                    if (protocol == InboundWizardProtocol.HYSTERIA2) serverName = defaults.serverName
+                }
+            }
+            error = null
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { error = failure.message ?: "Не удалось подготовить настройки инбаунда." }
+        finally { loadingDefaults = false }
+    }
+    fun selectedPorts(): List<Int> = when (protocol) {
+        InboundWizardProtocol.VLESS_REALITY -> listOfNotNull(
+            tcpPort.toIntOrNull().takeIf { vlessTransport in setOf("TCP", "TCP и XHTTP") },
+            xhttpPort.toIntOrNull().takeIf { vlessTransport in setOf("XHTTP", "TCP и XHTTP") },
+        )
+        else -> listOfNotNull(port.toIntOrNull())
+    }
+    val portsValid = selectedPorts().size == requestedPortCount && selectedPorts().all { it in 1..65535 } && selectedPorts().distinct().size == selectedPorts().size
+    val ipv4 = Regex("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}")
+    val certificatePathsValid = certificateFile.startsWith('/') && keyFile.startsWith('/') && certificateFile.length <= 4096 && keyFile.length <= 4096
+    val settingsValid = portsValid && when (protocol) {
+        InboundWizardProtocol.VLESS_REALITY -> runCatching { InboundDraft.normalizeSni(serverName.trim()) }.isSuccess && fingerprint in InboundDraft.fingerprints
+        InboundWizardProtocol.HYSTERIA2 -> hysteriaWizardServerNameValid(serverName) && hysteriaAlpn.matches(Regex("[A-Za-z0-9._-]{1,64}")) && certificatePathsValid
+        InboundWizardProtocol.AMNEZIAWG -> awgMtu.toIntOrNull() in 576..65535 && listOf(awgPrimaryDns, awgSecondaryDns).all { it.matches(ipv4) }
+        InboundWizardProtocol.TROJAN -> certificatePathsValid
+        InboundWizardProtocol.SHADOWSOCKS -> shadowsocksMethod in InboundDraft.shadowsocksMethods
+        InboundWizardProtocol.VMESS -> true
     }
     val back: () -> Unit = {
         if (!busy) {
@@ -711,52 +774,103 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
         error?.let { ServerUiError(it) }
         when (step) {
             0 -> {
-                ServerUiCaption("Мастер позволяет автоматически создать подключение, настроить протокол и транспорт. После создания можно добавлять клиентов и сгенерировать ключи")
-                CascadePanelChoice("Панель", panels, panelId, !busy) { panelId = it }
-                if (panel != null && !panel.sshManaged) ServerUiCaption("При выборе порта учитываются только порты панели, но не порты сервера. Самостоятельно убедитесь, что порт свободен. Для автоматической проверки добавьте панель по SSH.")
-                ServerUiPrimaryButton("Далее", { step = 1 }, enabled = panel != null && !loadingPorts)
+                ServerUiHeading("Выберите протокол и панель")
+                ServerUiCaption("Мастер создаёт новый инбаунд с безопасными рабочими параметрами. Перед созданием значения можно изменить.")
+                CascadeChoice("Протокол", inboundWizardProtocolLabel(protocol), listOf(
+                    "VLESS + REALITY", "VMess", "Trojan", "Shadowsocks", "Hysteria2", "AmneziaWG",
+                ), !busy) { value ->
+                    protocolName = when (value) {
+                        "VMess" -> InboundWizardProtocol.VMESS.name
+                        "Trojan" -> InboundWizardProtocol.TROJAN.name
+                        "Shadowsocks" -> InboundWizardProtocol.SHADOWSOCKS.name
+                        "Hysteria2" -> InboundWizardProtocol.HYSTERIA2.name
+                        "AmneziaWG" -> InboundWizardProtocol.AMNEZIAWG.name
+                        else -> InboundWizardProtocol.VLESS_REALITY.name
+                    }
+                }
+                CascadePanelChoice("Панель", panels, panelId, !busy, compactCountryName = true) { panelId = it }
+                if (panel != null && !panel.sshManaged) ServerUiCaption("Порт проверяется среди инбаундов панели. Для проверки занятого TCP/UDP-порта на сервере добавьте панель по SSH.")
+                ServerUiPrimaryButton("Далее", { step = 1 }, enabled = panel != null && !loadingDefaults && error == null)
             }
             1 -> {
-                ServerUiHeading("Протокол VLESS · REALITY")
-                ServerUiCaption("Выберите тип транспорта для протокола. Можно выбрать сразу всё или по отдельности.")
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.RadioButton(selected = tcp, onClick = { tcp = !tcp; if (tcp && tcpPort.isBlank()) tcpPort = if (xhttp && xhttpPort == suggestedTcp) suggestedXhttp else suggestedTcp }, enabled = !busy); ServerUiCaption("(RAW) TCP")
+                ServerUiHeading(inboundWizardProtocolLabel(protocol))
+                when (protocol) {
+                    InboundWizardProtocol.VLESS_REALITY -> {
+                        ServerUiCaption("REALITY-ключи, short ID и путь создаются автоматически. Выберите один транспорт или оба.")
+                        CascadeChoice("Транспорт", vlessTransport, listOf("TCP", "XHTTP", "TCP и XHTTP"), !busy) { vlessTransport = it }
+                        if (vlessTransport in setOf("TCP", "TCP и XHTTP")) {
+                            ServerUiField(tcpPort, { if (it.length <= 5) tcpPort = it }, "Порт TCP", enabled = !busy, maxLength = 5)
+                        }
+                        if (vlessTransport in setOf("XHTTP", "TCP и XHTTP")) {
+                            ServerUiField(xhttpPort, { if (it.length <= 5) xhttpPort = it }, "Порт XHTTP", enabled = !busy, maxLength = 5)
+                        }
+                        ServerUiField(serverName, { serverName = it }, "SNI REALITY", enabled = !busy, maxLength = 253,
+                            hint = "По умолчанию google.com; DNS-имя без схемы и порта.")
+                        CascadeChoice("Fingerprint", fingerprint, InboundDraft.fingerprints.filter { it.isNotBlank() && it != "unsafe" }, !busy) { fingerprint = it }
+                    }
+                    InboundWizardProtocol.HYSTERIA2 -> {
+                        ServerUiCaption("Используется QUIC/UDP, TLS 1.2–1.3, ALPN h3 и Salamander mask. Сертификат панели подставлен автоматически.")
+                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт UDP", enabled = !busy, maxLength = 5)
+                        ServerUiField(serverName, { serverName = it }, "SNI Hysteria2", enabled = !busy, maxLength = 253, hint = "Домен или IPv4-адрес панели.")
+                        ServerUiField(certificateFile, { certificateFile = it }, "Certificate", enabled = !busy, maxLength = 4096, hint = "Абсолютный путь к certificate file.")
+                        ServerUiField(keyFile, { keyFile = it }, "Key", enabled = !busy, maxLength = 4096, hint = "Абсолютный путь к key file.")
+                        ServerUiField(hysteriaAlpn, { hysteriaAlpn = it }, "ALPN", enabled = !busy, maxLength = 64, hint = "По умолчанию h3.")
+                    }
+                    InboundWizardProtocol.AMNEZIAWG -> {
+                        ServerUiCaption("Используется UDP. Ключи, свободная внутренняя подсеть и параметры маскировки создаются автоматически.")
+                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт UDP", enabled = !busy, maxLength = 5)
+                        ServerUiField(awgMtu, { if (it.length <= 5) awgMtu = it }, "MTU", enabled = !busy, maxLength = 5, hint = "По умолчанию 1280.")
+                        ServerUiField(awgPrimaryDns, { awgPrimaryDns = it }, "Основной DNS", enabled = !busy, maxLength = 15)
+                        ServerUiField(awgSecondaryDns, { awgSecondaryDns = it }, "Резервный DNS", enabled = !busy, maxLength = 15)
+                    }
+                    InboundWizardProtocol.TROJAN -> {
+                        ServerUiCaption("Используется TCP с TLS. Сертификат панели подставлен автоматически.")
+                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт TCP", enabled = !busy, maxLength = 5)
+                        ServerUiField(certificateFile, { certificateFile = it }, "Certificate", enabled = !busy, maxLength = 4096, hint = "Абсолютный путь к certificate file.")
+                        ServerUiField(keyFile, { keyFile = it }, "Key", enabled = !busy, maxLength = 4096, hint = "Абсолютный путь к key file.")
+                    }
+                    InboundWizardProtocol.SHADOWSOCKS -> {
+                        ServerUiCaption("Серверный ключ SS2022 генерируется автоматически для выбранного шифра.")
+                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт TCP/UDP", enabled = !busy, maxLength = 5)
+                        CascadeChoice("Шифр", shadowsocksMethod, InboundDraft.shadowsocksMethods, !busy) { shadowsocksMethod = it }
+                    }
+                    InboundWizardProtocol.VMESS -> {
+                        ServerUiCaption("Используется TCP с параметрами VMess по умолчанию. Дополнительные параметры доступны после создания.")
+                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт TCP", enabled = !busy, maxLength = 5)
+                    }
                 }
-                if (tcp) OutlinedTextField(value = tcpPort, onValueChange = { if (it.length <= 5) tcpPort = it },
-                    modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused && tcpPort.isBlank()) tcpPort = if (xhttp && xhttpPort == suggestedTcp) suggestedXhttp else suggestedTcp },
-                    label = { Text("Порт TCP") }, enabled = !busy, singleLine = true)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.RadioButton(selected = xhttp, onClick = { xhttp = !xhttp; if (xhttp && xhttpPort.isBlank()) xhttpPort = if (tcp && tcpPort == suggestedTcp) suggestedXhttp else suggestedTcp }, enabled = !busy); ServerUiCaption("XHTTP")
-                }
-                if (xhttp) OutlinedTextField(value = xhttpPort, onValueChange = { if (it.length <= 5) xhttpPort = it },
-                    modifier = Modifier.fillMaxWidth().onFocusChanged { if (!it.isFocused && xhttpPort.isBlank()) xhttpPort = if (tcp && tcpPort == suggestedTcp) suggestedXhttp else suggestedTcp },
-                    label = { Text("Порт XHTTP") }, enabled = !busy, singleLine = true)
-                ServerUiCaption("TCP — прямое подключение; XHTTP — передача трафика через HTTP-транспорт.")
-                val a = tcpPort.toIntOrNull(); val b = xhttpPort.toIntOrNull()
-                val valid = (tcp || xhttp) && (!tcp || a in 1..65535) && (!xhttp || b in 1..65535) && (!tcp || !xhttp || a != b)
+                if (loadingDefaults) ServerUiCaption("Проверка свободных портов…")
                 ServerUiPrimaryButton("Далее", {
                     busy = true; error = null
                     scope.launch {
                         try {
-                            model.wizardValidatePorts(panelId, listOfNotNull(a.takeIf { tcp }, b.takeIf { xhttp }))
+                            model.wizardValidatePorts(panelId, selectedPorts())
                             step = 2
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (failure: Exception) { error = failure.message ?: "Не удалось проверить порты." }
                         finally { busy = false }
                     }
-                }, enabled = valid && !loadingPorts && !busy)
+                }, enabled = settingsValid && !loadingDefaults && !busy)
             }
             2 -> {
-                ServerUiCaption("Придумайте и назначьте имя подключения, оно будет использоваться для идентификации инбаунда в панели 3x-UI на сервере и в приложении. Можете добавить флаг страны которая относится к локации сервера с этим подключением. Добавить флаг страны можно в любом месте имени (Пример команды: :RU в начале или :RU: в любом месте имени)")
+                ServerUiCaption("Имя используется для идентификации инбаунда в панели 3x-ui и приложении. Флаг страны можно добавить в формате :RU или :RU:.")
                 OutlinedTextField(value = name, onValueChange = { if (it.text.length <= 100) name = updateClientName(name, it) },
                     modifier = Modifier.fillMaxWidth(), label = { Text("Имя инбаунда") }, enabled = !busy, singleLine = true)
                 ServerUiPrimaryButton("Создать", {
                     busy = true; error = null; progress = 0; progressLabel = "Подготовка"; step = 3
                     scope.launch {
                         try {
-                            val ids = model.wizardCreateInbounds(panelId, name.text, tcpPort.toIntOrNull().takeIf { tcp }, xhttpPort.toIntOrNull().takeIf { xhttp }) { percent, label ->
-                                progress = percent; progressLabel = label
-                            }
+                            val request = InboundWizardRequest(
+                                panelId = panelId, name = name.text, protocol = protocol,
+                                tcpPort = tcpPort.toIntOrNull().takeIf { protocol == InboundWizardProtocol.VLESS_REALITY && vlessTransport in setOf("TCP", "TCP и XHTTP") },
+                                xhttpPort = xhttpPort.toIntOrNull().takeIf { protocol == InboundWizardProtocol.VLESS_REALITY && vlessTransport in setOf("XHTTP", "TCP и XHTTP") },
+                                port = port.toIntOrNull().takeIf { protocol != InboundWizardProtocol.VLESS_REALITY },
+                                serverName = serverName.trim(), fingerprint = fingerprint,
+                                certificateFile = certificateFile.trim(), keyFile = keyFile.trim(), hysteriaAlpn = hysteriaAlpn.trim(),
+                                awgMtu = awgMtu.toIntOrNull() ?: 0, awgPrimaryDns = awgPrimaryDns.trim(), awgSecondaryDns = awgSecondaryDns.trim(),
+                                shadowsocksMethod = shadowsocksMethod,
+                            )
+                            val ids = model.wizardCreateInbounds(request) { percent, label -> progress = percent; progressLabel = label }
                             firstCreatedId = ids.firstOrNull()
                             done = true
                         } catch (cancelled: CancellationException) { throw cancelled }
@@ -771,7 +885,7 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
                 LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth().heightIn(min = 8.dp))
                 ServerUiCaption(progressLabel)
                 if (done) {
-                    ServerUiCaption("Теперь необходимо создать клиента, чтобы сгенерировался ключ. Вы можете редактировать, изменять и удалять созданные инбаунды. Перейти к созданию клиента или редактированию этого инбаунда?")
+                    ServerUiCaption("Инбаунд создан. Теперь можно добавить клиента, сгенерировать ключи или изменить дополнительные параметры.")
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Box(Modifier.weight(1f)) { ServerUiPrimaryButton("Перейти", { firstCreatedId?.let { onOpen(panelId, it) } }, enabled = firstCreatedId != null) }
                         Box(Modifier.weight(1f)) { ServerUiPrimaryButton("Не сейчас", onBack) }
@@ -780,6 +894,22 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
             }
         }
     }
+}
+
+private fun hysteriaWizardServerNameValid(value: String): Boolean {
+    val candidate = value.trim()
+    if (runCatching { InboundDraft.normalizeSni(candidate) }.isSuccess) return true
+    return candidate.matches(Regex("(?:0|[1-9][0-9]{0,2})(?:\\.(?:0|[1-9][0-9]{0,2})){3}")) &&
+        candidate.split('.').all { it.toInt() in 0..255 }
+}
+
+private fun inboundWizardProtocolLabel(protocol: InboundWizardProtocol): String = when (protocol) {
+    InboundWizardProtocol.VLESS_REALITY -> "VLESS + REALITY"
+    InboundWizardProtocol.VMESS -> "VMess"
+    InboundWizardProtocol.TROJAN -> "Trojan"
+    InboundWizardProtocol.SHADOWSOCKS -> "Shadowsocks"
+    InboundWizardProtocol.HYSTERIA2 -> "Hysteria2"
+    InboundWizardProtocol.AMNEZIAWG -> "AmneziaWG"
 }
 
 @Composable
@@ -1128,15 +1258,22 @@ private fun CascadeChoice(label: String, selected: String, choices: List<String>
 }
 
 @Composable
-private fun CascadePanelChoice(label: String, panels: List<PanelSummary>, selected: String, enabled: Boolean, onSelect: (String) -> Unit) {
+private fun CascadePanelChoice(
+    label: String,
+    panels: List<PanelSummary>,
+    selected: String,
+    enabled: Boolean,
+    compactCountryName: Boolean = false,
+    onSelect: (String) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     fun title(panel: PanelSummary): String {
         val location = panel.location
         val name = app.invilink.xboard.panels.panelDisplayName(
             panel.name, panel.displayAddress ?: location?.ipAddress, panel.domainAddress,
         )
-        return listOfNotNull(name, location?.countryFlag?.takeIf { it.isNotBlank() },
-            location?.countryName?.takeIf { it.isNotBlank() }).joinToString(" · ")
+        val country = if (compactCountryName && location?.countryCode?.equals("RU", ignoreCase = true) == true) "Россия" else location?.countryName
+        return listOfNotNull(name, location?.countryFlag?.takeIf { it.isNotBlank() }, country?.takeIf { it.isNotBlank() }).joinToString(" · ")
     }
     ServerUiTitle(label)
     val palette = LocalXBoardPalette.current
@@ -1243,7 +1380,7 @@ internal fun CredentialsDialog(server: InstalledServer, onDismiss: () -> Unit,
     var editPassword by remember(server.panelId) { mutableStateOf(false) }
     var login by remember(server.panelId) { mutableStateOf(server.panelUsername) }
     var password by remember(server.panelId) { mutableStateOf("") }
-    ServerUiSecureDialog("Доступ и данные 3x-UI", busy = busy, onDismiss = onDismiss) {
+    ServerUiSecureDialog("Доступ и данные 3x-ui", busy = busy, onDismiss = onDismiss) {
         key(server.panelId) {
             ServerUiCard {
                 CompactServerSetting("Адрес панели", server.panelUrl)

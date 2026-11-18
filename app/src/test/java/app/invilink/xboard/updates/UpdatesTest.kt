@@ -77,6 +77,15 @@ class UpdatesTest {
         assertFalse(isUpdateCoolingDown(declined, declined + day))
         assertTrue(isUpdateCoolingDown(declined, declined - 1))
     }
+    @Test fun launchReminderIsVersionAwareAndDaily() {
+        val day = UpdateScheduler.LAUNCH_REMINDER_INTERVAL_MILLIS
+        assertTrue(shouldRemindForRelease(null, 0L, "1.0.3", 10_000L))
+        assertFalse(shouldRemindForRelease("1.0.3", 10_000L, "1.0.3", 10_000L + day - 1))
+        assertTrue(shouldRemindForRelease("1.0.3", 10_000L, "1.0.3", 10_000L + day))
+        assertTrue(shouldRemindForRelease("1.0.3", 10_000L, "1.0.4", 10_001L))
+        assertTrue(shouldRemindForRelease("1.0.3", 10_000L, "1.0.3", 9_999L))
+    }
+
     @Test fun redirectsMustUseExactHttpsHosts() {
         assertTrue(UpdateUrls.allowed("https://release-assets.githubusercontent.com/file?token=1"))
         listOf("http://github.com/a", "https://github.com.evil.example/a", "https://github.com@evil.example/a", "https://github.com:444/a", "https://evil.example/a", "https://objects.githubusercontent.com.evil.example/a").forEach { assertFalse(it, UpdateUrls.allowed(it)) }

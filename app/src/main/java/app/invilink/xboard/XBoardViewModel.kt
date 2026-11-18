@@ -104,6 +104,39 @@ internal data class ProtectionMenuSettings(val enabled: Boolean = false,
 
 internal data class CascadeInboundSelection(val id: Long, val name: String, val port: Int)
 
+internal enum class InboundWizardProtocol {
+    VLESS_REALITY,
+    VMESS,
+    TROJAN,
+    SHADOWSOCKS,
+    HYSTERIA2,
+    AMNEZIAWG,
+}
+
+internal data class InboundWizardRequest(
+    val panelId: String,
+    val name: String,
+    val protocol: InboundWizardProtocol,
+    val tcpPort: Int? = null,
+    val xhttpPort: Int? = null,
+    val port: Int? = null,
+    val serverName: String = "",
+    val fingerprint: String = "chrome",
+    val certificateFile: String = "",
+    val keyFile: String = "",
+    val hysteriaAlpn: String = "h3",
+    val awgMtu: Int = 1280,
+    val awgPrimaryDns: String = "8.8.8.8",
+    val awgSecondaryDns: String = "1.1.1.1",
+    val shadowsocksMethod: String = "2022-blake3-aes-256-gcm",
+)
+
+internal data class InboundWizardPanelDefaults(
+    val serverName: String,
+    val certificateFile: String,
+    val keyFile: String,
+)
+
 internal data class CascadeForm(
     val chooseInbounds: Boolean = false,
     val hideEntry: Boolean = false, val hideExit: Boolean = false,
@@ -162,6 +195,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
     private val mutableUpdate = MutableStateFlow(UpdateUiState(enabled = UpdateScheduler.isEnabled(application)))
     val update = mutableUpdate.asStateFlow()
     private var updateJob: Job? = null
+    private var launchUpdateCheckStarted = false
     private var verifiedUpdate: VerifiedUpdate? = null
     private var installerLaunched = false
     private var automaticInstallAttempted = false
@@ -315,13 +349,31 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
             mutableCascade.update { it.copy(form = transform(it.form), error = null) }
     }
 
-    internal suspend fun wizardSuggestedPorts(panelId: String): List<Int> {
+    internal suspend fun wizardSuggestedPorts(panelId: String, protocol: InboundWizardProtocol, count: Int): List<Int> {
         check(foreground && sessionActive() && !mutableState.value.stealthMode && connectivity.online.value)
+        require(count in 1..2) { "Нужно выбрать от одного до двух портов." }
         val config = panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == panelId }) }
         val used = panelApi.inbounds(config).map { it.port }.toSet()
-        val preferred = listOf(443, 1443, 2443, 3443, 4443, 5443, 6443, 7443, 8443, 9443)
-        val candidates = (preferred + (1000..9999).filter { it !in preferred }).filterNot { it in used }
-        return availableWizardPorts(panelId, candidates, 2)
+        val candidates = when (protocol) {
+            InboundWizardProtocol.HYSTERIA2, InboundWizardProtocol.AMNEZIAWG -> app.invilink.xboard.panels.hysteriaUdpPortCandidates()
+            else -> {
+                val preferred = listOf(443, 1443, 2443, 3443, 4443, 5443, 6443, 7443, 8443, 9443)
+                preferred + (1000..9999).filter { it !in preferred }
+            }
+        }.filterNot { it in used }
+        return availableWizardPorts(panelId, candidates, count)
+    }
+
+    internal suspend fun wizardInboundPanelDefaults(panelId: String): InboundWizardPanelDefaults {
+        val config = panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == panelId }) { "Панель не найдена." } }
+        val host = runCatching { URI(config.baseUrl).host?.removeSurrounding("[", "]") }.getOrNull().orEmpty()
+        require(host.isNotBlank()) { "Не удалось определить адрес панели для сертификата." }
+        val target = certificateDirectoryTarget(panelId)
+        return InboundWizardPanelDefaults(
+            serverName = host,
+            certificateFile = "/root/cert/$target/fullchain.pem",
+            keyFile = "/root/cert/$target/privkey.pem",
+        )
     }
 
     private suspend fun availableWizardPorts(panelId: String, ports: List<Int>, limit: Int): List<Int> {
@@ -356,45 +408,105 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         checkWizardServerPorts(panelId, ports)
     }
 
-    internal suspend fun wizardCreateInbounds(panelId: String, baseName: String, tcpPort: Int?, xhttpPort: Int?, progress: (Int, String) -> Unit): List<Long> {
+    internal suspend fun wizardCreateInbounds(request: InboundWizardRequest, progress: (Int, String) -> Unit): List<Long> {
         progress(10, "Проверка панели и портов")
         check(foreground && sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) { "Нет активной сессии или сети." }
         check(repository.pendingCount() == 0) { "Сначала синхронизируйте ожидающие изменения." }
-        val ports = listOfNotNull(tcpPort, xhttpPort)
+        val ports = when (request.protocol) {
+            InboundWizardProtocol.VLESS_REALITY -> listOfNotNull(request.tcpPort, request.xhttpPort)
+            else -> listOfNotNull(request.port)
+        }
         require(ports.isNotEmpty() && ports.all { it in 1..65535 } && ports.distinct().size == ports.size) { "Укажите разные корректные порты." }
-        val name = app.invilink.xboard.panels.normalizeClientName(baseName.trim())
+        val name = app.invilink.xboard.panels.normalizeClientName(request.name.trim())
         require(name.isNotBlank() && name.length <= 100 && name.none { it.isISOControl() }) { "Укажите корректное имя инбаунда." }
-        val config = panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == panelId }) { "Панель не найдена." } }
-        checkWizardServerPorts(panelId, ports)
+        val config = panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == request.panelId }) { "Панель не найдена." } }
+        checkWizardServerPorts(request.panelId, ports)
         val existing = panelApi.inbounds(config)
         require(existing.none { it.port in ports }) { "Порт уже используется инбаундом панели." }
-        val names = if (ports.size == 2) listOf("$name TCP", "$name XHTTP") else listOf(name)
+        val names = when (request.protocol) {
+            InboundWizardProtocol.VLESS_REALITY -> when (ports.size) {
+                2 -> listOf("$name TCP", "$name XHTTP")
+                else -> listOf(name)
+            }
+            else -> listOf(name)
+        }
         require(existing.none { old -> names.any { it.equals(old.name, ignoreCase = true) } }) { "Имя инбаунда уже используется." }
-        val networks = listOfNotNull(tcpPort?.let { "tcp" to it }, xhttpPort?.let { "xhttp" to it })
         val gateway = PanelApiCascadeGateway(panelApi, resolve = { id ->
-            check(foreground && sessionActive() && connectivity.online.value && id == panelId) { "Сессия закрыта." }
+            check(foreground && sessionActive() && connectivity.online.value && id == request.panelId) { "Сессия закрыта." }
             config
         })
         val service = CascadeService(gateway, cascadeJournal)
+        val drafts = when (request.protocol) {
+            InboundWizardProtocol.VLESS_REALITY -> listOfNotNull(
+                request.tcpPort?.let { service.realityInbound(names[0], "inbound-${UUID.randomUUID()}", it,
+                    request.serverName, "tcp", "/${UUID.randomUUID().toString().replace("-", "")}", request.fingerprint) },
+                request.xhttpPort?.let { service.realityInbound(names[if (request.tcpPort == null) 0 else 1], "inbound-${UUID.randomUUID()}", it,
+                    request.serverName, "xhttp", "/${UUID.randomUUID().toString().replace("-", "")}", request.fingerprint) },
+            )
+            InboundWizardProtocol.HYSTERIA2 -> listOf(service.hysteriaInbound(name, "inbound-${UUID.randomUUID()}", ports.single(),
+                request.serverName, certificateDirectoryTarget(request.panelId), request.hysteriaAlpn, request.certificateFile, request.keyFile))
+            InboundWizardProtocol.AMNEZIAWG -> listOf(service.amneziaWgInbound(name, "inbound-${UUID.randomUUID()}", ports.single(),
+                wizardAmneziaWgSubnet(existing), request.awgMtu, request.awgPrimaryDns, request.awgSecondaryDns))
+            InboundWizardProtocol.VMESS -> listOf(wizardStandardInbound(name, ports.single(), "vmess"))
+            InboundWizardProtocol.TROJAN -> listOf(wizardStandardInbound(name, ports.single(), "trojan", request.certificateFile, request.keyFile))
+            InboundWizardProtocol.SHADOWSOCKS -> listOf(wizardShadowsocksInbound(name, ports.single(), request.shadowsocksMethod))
+        }
         var created = 0
         val createdIds = mutableListOf<Long>()
         try {
-            for ((index, item) in networks.withIndex()) {
-                val (network, port) = item
-                val tag = "inbound-" + java.util.UUID.randomUUID().toString()
-                val sni = "google.com"
-                progress(25 + index * 50 / networks.size, "Создание ${if (network == "tcp") "TCP" else "XHTTP"}")
-                val draft = service.realityInbound(names[index], tag, port, sni, network,
-                    "/" + java.util.UUID.randomUUID().toString().replace("-", ""), "chrome")
-                createdIds += gateway.createInbound(panelId, draft)
+            for ((index, draft) in drafts.withIndex()) {
+                progress(25 + index * 50 / drafts.size, "Создание ${wizardProtocolLabel(request.protocol)}")
+                createdIds += gateway.createInbound(request.panelId, draft)
                 created++
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
-            throw IllegalStateException("Создано $created из ${networks.size}. Последняя операция могла выполниться; проверьте панель перед повтором. ${failure.message.orEmpty()}", failure)
+            throw IllegalStateException("Создано $created из ${drafts.size}. Последняя операция могла выполниться; проверьте панель перед повтором. ${failure.message.orEmpty()}", failure)
         }
         progress(100, "Готово")
         return createdIds
+    }
+
+    private fun wizardStandardInbound(name: String, port: Int, protocol: String, certificateFile: String = "", keyFile: String = ""): InboundDraft {
+        var draft = InboundDraft(name = name, port = port.toString()).update("protocol", protocol)
+            .update("name", name).update("port", port.toString()).update("tag", "inbound-${UUID.randomUUID()}")
+        if (protocol == "trojan") {
+            require(certificateFile.startsWith('/') && keyFile.startsWith('/')) { "Для Trojan укажите абсолютные пути certificate и key." }
+            draft = draft.update("security", "tls")
+                .update("tls:certificateFile", certificateFile)
+                .update("tls:keyFile", keyFile)
+        }
+        return draft.prepareForSave()
+    }
+
+    private fun wizardShadowsocksInbound(name: String, port: Int, method: String): InboundDraft {
+        require(method in InboundDraft.shadowsocksMethods) { "Выберите поддерживаемый шифр Shadowsocks." }
+        return InboundDraft(name = name, port = port.toString()).update("protocol", "shadowsocks")
+            .update("name", name).update("port", port.toString()).update("tag", "inbound-${UUID.randomUUID()}")
+            .update("settings:method", method)
+            .update("settings:password", app.invilink.xboard.panels.ConnectionGenerators.shadowsocksPassword(method))
+            .prepareForSave()
+    }
+
+    private fun wizardAmneziaWgSubnet(existing: List<app.invilink.xboard.panels.InboundDetail>): String {
+        val occupied = existing.asSequence().filter { it.protocol == "amneziawg" }.mapNotNull { inbound ->
+            runCatching { JSONObject(inbound.settings).optJSONObject("server")?.optString("subnetIp") }.getOrNull()
+        }.filter { it.isNotBlank() }.toSet()
+        val random = java.security.SecureRandom()
+        repeat(512) {
+            val candidate = "172.${16 + random.nextInt(16)}.${1 + random.nextInt(250)}.0"
+            if (candidate !in occupied) return candidate
+        }
+        throw IllegalStateException("Не удалось подобрать свободную внутреннюю подсеть AmneziaWG.")
+    }
+
+    private fun wizardProtocolLabel(protocol: InboundWizardProtocol): String = when (protocol) {
+        InboundWizardProtocol.VLESS_REALITY -> "VLESS + REALITY"
+        InboundWizardProtocol.VMESS -> "VMess"
+        InboundWizardProtocol.TROJAN -> "Trojan"
+        InboundWizardProtocol.SHADOWSOCKS -> "Shadowsocks"
+        InboundWizardProtocol.HYSTERIA2 -> "Hysteria2"
+        InboundWizardProtocol.AMNEZIAWG -> "AmneziaWG"
     }
 
     internal fun openWizardInbound(panelId: String, inboundId: Long): Boolean {
@@ -1212,6 +1324,20 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         val scheduled = UpdateScheduler.setEnabled(getApplication(), enabled)
         mutableUpdate.update { it.copy(enabled = enabled, visible = !scheduled || it.visible,
             message = if (!scheduled) "Android не принял задачу проверки. Повторите включение." else null) }
+    }
+
+    private fun checkForUpdatesAtLaunch() {
+        if (launchUpdateCheckStarted || !canPresentUpdate() || updateJob?.isActive == true) return
+        launchUpdateCheckStarted = true
+        updateJob = viewModelScope.launch {
+            try {
+                val result = updateClient.check()
+                if (result is UpdateCheck.Available && UpdateScheduler.shouldShowLaunchReminder(getApplication(), result.release)) {
+                    mutableUpdate.update { it.copy(visible = true, busy = false, release = result.release, ready = false, message = null) }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* A launch check is silent; the manual action shows errors. */ }
+        }
     }
 
     fun checkForUpdates() {
@@ -2406,7 +2532,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                          inboundDraft = InboundDraft.create(), pendingChanges = pending,
                         syncMessage = if (result.queued) result.message else it.syncMessage,
                         noticeId = UUID.randomUUID().toString(),
-                        notice = if (result.queued) "Инбаунд сохранён локально. Ожидает синхронизации." else if (prepared.id == null) "Инбаунд создан и сохранён в 3x-UI." else "Настройки инбаунда сохранены в 3x-UI.")
+                        notice = if (result.queued) "Инбаунд сохранён локально. Ожидает синхронизации." else if (prepared.id == null) "Инбаунд создан и сохранён в 3x-ui." else "Настройки инбаунда сохранены в 3x-ui.")
                 }
                 try {
                     val inbounds = refreshedMutationRows(config, online && !result.queued)
@@ -2756,7 +2882,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                         pendingChanges = pending, syncMessage = if (result.queued) result.message else it.syncMessage,
                         expandedInbounds = it.expandedInbounds + inbound.id,
                         noticeId = UUID.randomUUID().toString(),
-                        notice = if (result.queued) "Клиент сохранён локально. Ожидает синхронизации." else if (editSession == null) "Клиент создан и сохранён в 3x-UI." else "Настройки клиента сохранены в 3x-UI.")
+                        notice = if (result.queued) "Клиент сохранён локально. Ожидает синхронизации." else if (editSession == null) "Клиент создан и сохранён в 3x-ui." else "Настройки клиента сохранены в 3x-ui.")
                 }
                 try {
                     val rows = refreshedMutationRows(config, online && !result.queued)
@@ -2811,7 +2937,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
             } catch (failure: Exception) {
                 if (generation == linksGeneration) mutableState.update { current ->
                     if (current.selectedClient == null) current.copy(detailsError = failure.message ?: "Не удалось открыть клиента.")
-                    else current.copy(linksError = "Не удалось получить ссылки от 3x-UI. Проверьте версию панели и разрешения токена на чтение ссылок клиентов.")
+                    else current.copy(linksError = "Не удалось получить ссылки от 3x-ui. Проверьте версию панели и разрешения токена на чтение ссылок клиентов.")
                 }
             } finally {
                 if (generation == linksGeneration) mutableState.update { it.copy(linksLoading = false) }
@@ -3050,6 +3176,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 val now = SystemClock.elapsedRealtime()
                 idleDeadline.touch(now)
                 if (!mutableState.value.stealthMode) PanelSyncScheduler.allowUntil(now + SESSION_GRACE_MILLIS)
+                checkForUpdatesAtLaunch()
             }
             startMonitoring()
             synchronizePending()

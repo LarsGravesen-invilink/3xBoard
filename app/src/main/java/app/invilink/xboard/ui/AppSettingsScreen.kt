@@ -254,7 +254,7 @@ internal fun AppSettingsScreen(
                     }
                 }
                 if (showFakePinSettings) AppSettingsSection("Меню защиты WebUI панелей", BoardSymbol.Lock) {
-                    Text("Включение/отключение функции и кнопки быстрого отключения доступа к панелям 3x-UI через графический интерфейс",
+                    Text("Включение/отключение функции и кнопки быстрого отключения доступа к панелям 3x-ui через графический интерфейс",
                         style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                     BoardButton(onClick = { protectionPage = true }, enabled = !busy,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Настроить") }
@@ -378,7 +378,7 @@ private fun ProtectionSettingsPage(settings: ProtectionMenuSettings, servers: Li
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 AppSettingsSection("Меню защиты WebUI панелей", BoardSymbol.Lock) {
-                    Text("Включение/отключение функции и кнопки быстрого отключения доступа к панелям 3x-UI через графический интерфейс",
+                    Text("Включение/отключение функции и кнопки быстрого отключения доступа к панелям 3x-ui через графический интерфейс",
                         style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("Включить", Modifier.weight(1f), color = palette.foreground)
@@ -481,7 +481,7 @@ internal fun PinChangeDialog(
     Dialog(
         onDismissRequest = { if (!busy) onDismiss() },
         properties = DialogProperties(
-            securePolicy = SecureFlagPolicy.SecureOn,
+            securePolicy = SecureFlagPolicy.Inherit,
             dismissOnBackPress = !busy,
             dismissOnClickOutside = !busy,
             usePlatformDefaultWidth = true
