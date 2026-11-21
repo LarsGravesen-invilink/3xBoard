@@ -50,6 +50,7 @@ import app.invilink.xboard.XBoardViewModel
 import app.invilink.xboard.CascadeInboundSelection
 import app.invilink.xboard.InboundWizardProtocol
 import app.invilink.xboard.InboundWizardRequest
+import app.invilink.xboard.panels.InboundPortTransport
 import app.invilink.xboard.panels.CascadeTransport
 import app.invilink.xboard.panels.CascadeProtocol
 import app.invilink.xboard.panels.cascadeFlag
@@ -700,12 +701,21 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
     val protocol = InboundWizardProtocol.valueOf(protocolName)
     var vlessTransport by rememberSaveable { mutableStateOf("TCP") }
     var tcpPort by rememberSaveable { mutableStateOf("") }
+    var tcpPortDefault by rememberSaveable { mutableStateOf("") }
+    var tcpPortAvailable by remember { mutableStateOf<Boolean?>(null) }
     var xhttpPort by rememberSaveable { mutableStateOf("") }
+    var xhttpPortDefault by rememberSaveable { mutableStateOf("") }
+    var xhttpPortAvailable by remember { mutableStateOf<Boolean?>(null) }
     var port by rememberSaveable { mutableStateOf("") }
+    var portDefault by rememberSaveable { mutableStateOf("") }
+    var portAvailable by remember { mutableStateOf<Boolean?>(null) }
     var serverName by rememberSaveable { mutableStateOf("google.com") }
+    var serverNameDefault by rememberSaveable { mutableStateOf("google.com") }
     var fingerprint by rememberSaveable { mutableStateOf("chrome") }
     var certificateFile by rememberSaveable { mutableStateOf("") }
+    var certificateFileDefault by rememberSaveable { mutableStateOf("") }
     var keyFile by rememberSaveable { mutableStateOf("") }
+    var keyFileDefault by rememberSaveable { mutableStateOf("") }
     var hysteriaAlpn by rememberSaveable { mutableStateOf("h3") }
     var awgMtu by rememberSaveable { mutableStateOf("1280") }
     var awgPrimaryDns by rememberSaveable { mutableStateOf("8.8.8.8") }
@@ -727,24 +737,50 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
         try {
             val ports = model.wizardSuggestedPorts(panelId, protocol, requestedPortCount)
             if (protocol == InboundWizardProtocol.VLESS_REALITY) {
-                tcpPort = if (vlessTransport in setOf("TCP", "TCP и XHTTP")) ports.getOrNull(0)?.toString().orEmpty() else ""
-                xhttpPort = if (vlessTransport == "XHTTP") ports.getOrNull(0)?.toString().orEmpty()
+                tcpPortDefault = if (vlessTransport in setOf("TCP", "TCP и XHTTP")) ports.getOrNull(0)?.toString().orEmpty() else ""
+                tcpPort = tcpPortDefault
+                xhttpPortDefault = if (vlessTransport == "XHTTP") ports.getOrNull(0)?.toString().orEmpty()
                     else if (vlessTransport == "TCP и XHTTP") ports.getOrNull(1)?.toString().orEmpty() else ""
-                serverName = "google.com"
+                xhttpPort = xhttpPortDefault
+                serverNameDefault = "google.com"
+                serverName = serverNameDefault
                 fingerprint = "chrome"
             } else {
-                port = ports.firstOrNull()?.toString().orEmpty()
+                portDefault = ports.firstOrNull()?.toString().orEmpty()
+                port = portDefault
                 if (protocol in setOf(InboundWizardProtocol.HYSTERIA2, InboundWizardProtocol.TROJAN)) {
                     val defaults = model.wizardInboundPanelDefaults(panelId)
-                    certificateFile = defaults.certificateFile
-                    keyFile = defaults.keyFile
-                    if (protocol == InboundWizardProtocol.HYSTERIA2) serverName = defaults.serverName
+                    certificateFileDefault = defaults.certificateFile
+                    certificateFile = certificateFileDefault
+                    keyFileDefault = defaults.keyFile
+                    keyFile = keyFileDefault
+                    if (protocol == InboundWizardProtocol.HYSTERIA2) {
+                        serverNameDefault = defaults.serverName
+                        serverName = serverNameDefault
+                    }
                 }
             }
+            tcpPortAvailable = null
+            xhttpPortAvailable = null
+            portAvailable = null
             error = null
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { error = failure.message ?: "Не удалось подготовить настройки инбаунда." }
         finally { loadingDefaults = false }
+    }
+    fun checkPortAvailability(
+        value: String,
+        transports: Set<InboundPortTransport>,
+        update: (Boolean?) -> Unit,
+        isCurrent: () -> Boolean,
+    ) {
+        update(null)
+        val selectedPort = value.toIntOrNull()?.takeIf { it in 1..65535 } ?: return
+        if (panelId.isBlank()) return
+        scope.launch {
+            val available = runCatching { model.wizardPortAvailable(panelId, selectedPort, transports) }.getOrNull()
+            if (isCurrent()) update(available)
+        }
     }
     fun selectedPorts(): List<Int> = when (protocol) {
         InboundWizardProtocol.VLESS_REALITY -> listOfNotNull(
@@ -769,7 +805,7 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
             if (step == 0 || done) onBack() else { step--; error = null }
         }
     }
-    ServerUiScreen(onBack = back, backEnabled = !busy, contentKey = step, title = "Мастер инбаундов") {
+    ServerUiScreen(onBack = back, backEnabled = !busy, contentKey = step, title = "Мастер инбаундов", clearFocusOnBackgroundTap = true) {
         if (step < 3) ServerUiCaption("Шаг ${step + 1} из 3")
         error?.let { ServerUiError(it) }
         when (step) {
@@ -789,7 +825,6 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
                     }
                 }
                 CascadePanelChoice("Панель", panels, panelId, !busy, compactCountryName = true) { panelId = it }
-                if (panel != null && !panel.sshManaged) ServerUiCaption("Порт проверяется среди инбаундов панели. Для проверки занятого TCP/UDP-порта на сервере добавьте панель по SSH.")
                 ServerUiPrimaryButton("Далее", { step = 1 }, enabled = panel != null && !loadingDefaults && error == null)
             }
             1 -> {
@@ -799,44 +834,135 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
                         ServerUiCaption("REALITY-ключи, short ID и путь создаются автоматически. Выберите один транспорт или оба.")
                         CascadeChoice("Транспорт", vlessTransport, listOf("TCP", "XHTTP", "TCP и XHTTP"), !busy) { vlessTransport = it }
                         if (vlessTransport in setOf("TCP", "TCP и XHTTP")) {
-                            ServerUiField(tcpPort, { if (it.length <= 5) tcpPort = it }, "Порт TCP", enabled = !busy, maxLength = 5)
+                            ServerUiField(
+                                tcpPort,
+                                { if (it.length <= 5) { tcpPort = it; tcpPortAvailable = null } },
+                                "Порт TCP",
+                                enabled = !busy,
+                                maxLength = 5,
+                                keyboardType = KeyboardType.Number,
+                                defaultValue = tcpPortDefault,
+                                onFocusLost = { value ->
+                                    checkPortAvailability(value, setOf(InboundPortTransport.TCP), { tcpPortAvailable = it }) { tcpPort == value }
+                                },
+                            )
+                            PortAvailabilityLabel(tcpPortAvailable)
                         }
                         if (vlessTransport in setOf("XHTTP", "TCP и XHTTP")) {
-                            ServerUiField(xhttpPort, { if (it.length <= 5) xhttpPort = it }, "Порт XHTTP", enabled = !busy, maxLength = 5)
+                            ServerUiField(
+                                xhttpPort,
+                                { if (it.length <= 5) { xhttpPort = it; xhttpPortAvailable = null } },
+                                "Порт XHTTP",
+                                enabled = !busy,
+                                maxLength = 5,
+                                keyboardType = KeyboardType.Number,
+                                defaultValue = xhttpPortDefault,
+                                onFocusLost = { value ->
+                                    checkPortAvailability(value, setOf(InboundPortTransport.TCP), { xhttpPortAvailable = it }) { xhttpPort == value }
+                                },
+                            )
+                            PortAvailabilityLabel(xhttpPortAvailable)
                         }
                         ServerUiField(serverName, { serverName = it }, "SNI REALITY", enabled = !busy, maxLength = 253,
-                            hint = "По умолчанию google.com; DNS-имя без схемы и порта.")
+                            hint = "По умолчанию google.com; DNS-имя без схемы и порта.", defaultValue = serverNameDefault)
                         CascadeChoice("Fingerprint", fingerprint, InboundDraft.fingerprints.filter { it.isNotBlank() && it != "unsafe" }, !busy) { fingerprint = it }
                     }
                     InboundWizardProtocol.HYSTERIA2 -> {
                         ServerUiCaption("Используется QUIC/UDP, TLS 1.2–1.3, ALPN h3 и Salamander mask. Сертификат панели подставлен автоматически.")
-                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт UDP", enabled = !busy, maxLength = 5)
-                        ServerUiField(serverName, { serverName = it }, "SNI Hysteria2", enabled = !busy, maxLength = 253, hint = "Домен или IPv4-адрес панели.")
-                        ServerUiField(certificateFile, { certificateFile = it }, "Certificate", enabled = !busy, maxLength = 4096, hint = "Абсолютный путь к certificate file.")
-                        ServerUiField(keyFile, { keyFile = it }, "Key", enabled = !busy, maxLength = 4096, hint = "Абсолютный путь к key file.")
-                        ServerUiField(hysteriaAlpn, { hysteriaAlpn = it }, "ALPN", enabled = !busy, maxLength = 64, hint = "По умолчанию h3.")
+                        ServerUiField(
+                            port,
+                            { if (it.length <= 5) { port = it; portAvailable = null } },
+                            "Порт UDP",
+                            enabled = !busy,
+                            maxLength = 5,
+                            keyboardType = KeyboardType.Number,
+                            defaultValue = portDefault,
+                            onFocusLost = { value ->
+                                checkPortAvailability(value, setOf(InboundPortTransport.UDP), { portAvailable = it }) { port == value }
+                            },
+                        )
+                        PortAvailabilityLabel(portAvailable)
+                        ServerUiField(serverName, { serverName = it }, "SNI Hysteria2", enabled = !busy, maxLength = 253,
+                            hint = "Домен или IPv4-адрес панели.", defaultValue = serverNameDefault)
+                        ServerUiField(certificateFile, { certificateFile = it }, "Certificate", enabled = !busy, maxLength = 4096,
+                            hint = "Абсолютный путь к certificate file.", defaultValue = certificateFileDefault)
+                        ServerUiField(keyFile, { keyFile = it }, "Key", enabled = !busy, maxLength = 4096,
+                            hint = "Абсолютный путь к key file.", defaultValue = keyFileDefault)
+                        ServerUiField(hysteriaAlpn, { hysteriaAlpn = it }, "ALPN", enabled = !busy, maxLength = 64,
+                            hint = "По умолчанию h3.", defaultValue = "h3")
                     }
                     InboundWizardProtocol.AMNEZIAWG -> {
                         ServerUiCaption("Используется UDP. Ключи, свободная внутренняя подсеть и параметры маскировки создаются автоматически.")
-                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт UDP", enabled = !busy, maxLength = 5)
-                        ServerUiField(awgMtu, { if (it.length <= 5) awgMtu = it }, "MTU", enabled = !busy, maxLength = 5, hint = "По умолчанию 1280.")
-                        ServerUiField(awgPrimaryDns, { awgPrimaryDns = it }, "Основной DNS", enabled = !busy, maxLength = 15)
-                        ServerUiField(awgSecondaryDns, { awgSecondaryDns = it }, "Резервный DNS", enabled = !busy, maxLength = 15)
+                        ServerUiField(
+                            port,
+                            { if (it.length <= 5) { port = it; portAvailable = null } },
+                            "Порт UDP",
+                            enabled = !busy,
+                            maxLength = 5,
+                            keyboardType = KeyboardType.Number,
+                            defaultValue = portDefault,
+                            onFocusLost = { value ->
+                                checkPortAvailability(value, setOf(InboundPortTransport.UDP), { portAvailable = it }) { port == value }
+                            },
+                        )
+                        PortAvailabilityLabel(portAvailable)
+                        ServerUiField(awgMtu, { if (it.length <= 5) awgMtu = it }, "MTU", enabled = !busy, maxLength = 5,
+                            hint = "По умолчанию 1280.", defaultValue = "1280")
+                        ServerUiField(awgPrimaryDns, { awgPrimaryDns = it }, "Основной DNS", enabled = !busy, maxLength = 15, defaultValue = "8.8.8.8")
+                        ServerUiField(awgSecondaryDns, { awgSecondaryDns = it }, "Резервный DNS", enabled = !busy, maxLength = 15, defaultValue = "1.1.1.1")
                     }
                     InboundWizardProtocol.TROJAN -> {
                         ServerUiCaption("Используется TCP с TLS. Сертификат панели подставлен автоматически.")
-                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт TCP", enabled = !busy, maxLength = 5)
-                        ServerUiField(certificateFile, { certificateFile = it }, "Certificate", enabled = !busy, maxLength = 4096, hint = "Абсолютный путь к certificate file.")
-                        ServerUiField(keyFile, { keyFile = it }, "Key", enabled = !busy, maxLength = 4096, hint = "Абсолютный путь к key file.")
+                        ServerUiField(
+                            port,
+                            { if (it.length <= 5) { port = it; portAvailable = null } },
+                            "Порт TCP",
+                            enabled = !busy,
+                            maxLength = 5,
+                            keyboardType = KeyboardType.Number,
+                            defaultValue = portDefault,
+                            onFocusLost = { value ->
+                                checkPortAvailability(value, setOf(InboundPortTransport.TCP), { portAvailable = it }) { port == value }
+                            },
+                        )
+                        PortAvailabilityLabel(portAvailable)
+                        ServerUiField(certificateFile, { certificateFile = it }, "Certificate", enabled = !busy, maxLength = 4096,
+                            hint = "Абсолютный путь к certificate file.", defaultValue = certificateFileDefault)
+                        ServerUiField(keyFile, { keyFile = it }, "Key", enabled = !busy, maxLength = 4096,
+                            hint = "Абсолютный путь к key file.", defaultValue = keyFileDefault)
                     }
                     InboundWizardProtocol.SHADOWSOCKS -> {
                         ServerUiCaption("Серверный ключ SS2022 генерируется автоматически для выбранного шифра.")
-                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт TCP/UDP", enabled = !busy, maxLength = 5)
+                        ServerUiField(
+                            port,
+                            { if (it.length <= 5) { port = it; portAvailable = null } },
+                            "Порт TCP/UDP",
+                            enabled = !busy,
+                            maxLength = 5,
+                            keyboardType = KeyboardType.Number,
+                            defaultValue = portDefault,
+                            onFocusLost = { value ->
+                                checkPortAvailability(value, setOf(InboundPortTransport.TCP, InboundPortTransport.UDP), { portAvailable = it }) { port == value }
+                            },
+                        )
+                        PortAvailabilityLabel(portAvailable)
                         CascadeChoice("Шифр", shadowsocksMethod, InboundDraft.shadowsocksMethods, !busy) { shadowsocksMethod = it }
                     }
                     InboundWizardProtocol.VMESS -> {
                         ServerUiCaption("Используется TCP с параметрами VMess по умолчанию. Дополнительные параметры доступны после создания.")
-                        ServerUiField(port, { if (it.length <= 5) port = it }, "Порт TCP", enabled = !busy, maxLength = 5)
+                        ServerUiField(
+                            port,
+                            { if (it.length <= 5) { port = it; portAvailable = null } },
+                            "Порт TCP",
+                            enabled = !busy,
+                            maxLength = 5,
+                            keyboardType = KeyboardType.Number,
+                            defaultValue = portDefault,
+                            onFocusLost = { value ->
+                                checkPortAvailability(value, setOf(InboundPortTransport.TCP), { portAvailable = it }) { port == value }
+                            },
+                        )
+                        PortAvailabilityLabel(portAvailable)
                     }
                 }
                 if (loadingDefaults) ServerUiCaption("Проверка свободных портов…")
@@ -844,7 +970,7 @@ internal fun InboundWizardScreen(panels: List<PanelSummary>, initialPanelId: Str
                     busy = true; error = null
                     scope.launch {
                         try {
-                            model.wizardValidatePorts(panelId, selectedPorts())
+                            model.wizardValidatePorts(panelId, protocol, selectedPorts())
                             step = 2
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (failure: Exception) { error = failure.message ?: "Не удалось проверить порты." }
@@ -903,6 +1029,17 @@ private fun hysteriaWizardServerNameValid(value: String): Boolean {
         candidate.split('.').all { it.toInt() in 0..255 }
 }
 
+@Composable
+private fun PortAvailabilityLabel(available: Boolean?) {
+    if (available == null) return
+    val palette = LocalXBoardPalette.current
+    Text(
+        if (available) "Порт доступен" else "Порт уже занят",
+        style = MaterialTheme.typography.bodySmall,
+        color = if (available) if (palette.isDark) Color(0xFF78D996) else Color(0xFF16833A) else palette.error,
+    )
+}
+
 private fun inboundWizardProtocolLabel(protocol: InboundWizardProtocol): String = when (protocol) {
     InboundWizardProtocol.VLESS_REALITY -> "VLESS + REALITY"
     InboundWizardProtocol.VMESS -> "VMess"
@@ -919,12 +1056,14 @@ internal fun CascadeWizardScreen(
     onCreate: (CascadeRequest) -> Unit, onDismiss: () -> Unit,
 ) {
     val model: XBoardViewModel = viewModel()
+    val scope = rememberCoroutineScope()
     val cascade by model.cascade.collectAsStateWithLifecycle()
     val appState by model.state.collectAsStateWithLifecycle()
     val form = cascade.form
+    var entryPortAvailable by remember { mutableStateOf<Boolean?>(null) }
+    var exitPortAvailable by remember { mutableStateOf<Boolean?>(null) }
     var addressEdited by rememberSaveable { mutableStateOf(false) }
     var step by rememberSaveable { mutableStateOf(0) }
-    var initialized by rememberSaveable { mutableStateOf(false) }
     var lastError by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(error) { if (error != null) lastError = error }
     val editable = !busy && metadata == null
@@ -938,11 +1077,11 @@ internal fun CascadeWizardScreen(
             ?.panelUrl?.let(::cascadePanelHost).orEmpty() else ""
         model.updateCascadeForm { current ->
             if (entry) {
-                val selected = current.copy(entryName = flag)
+                val selected = current.copy(entryName = flag, entryNameDefault = flag)
                 if (selected.exit == panel.id) {
-                    selected.copy(exit = "", exitName = "", exitPort = "", exitSuggestion = null, exitLoading = false, exitInbound = null, address = "")
+                    selected.copy(exit = "", exitName = "", exitNameDefault = "", exitPort = "", exitPortDefault = "", exitSuggestion = null, exitLoading = false, exitInbound = null, address = "")
                 } else selected
-            } else current.copy(exitName = flag, address = suggestedAddress)
+            } else current.copy(exitName = flag, exitNameDefault = flag, address = suggestedAddress)
         }
     }
     LaunchedEffect(appState.unlockAllEnabled) {
@@ -951,12 +1090,6 @@ internal fun CascadeWizardScreen(
                 entryPort = if (current.entryInbound != null) "" else current.entryPort,
                 exitPort = if (current.exitInbound != null) "" else current.exitPort,
                 entryInbound = null, exitInbound = null)
-        }
-    }
-    LaunchedEffect(initialized, busy, metadata) {
-        if (!initialized && !busy && metadata == null) {
-            model.updateCascadeForm { it.copy(transport = CascadeTransport.XHTTP) }
-            initialized = true
         }
     }
     LaunchedEffect(initialPanelId, panels) {
@@ -984,6 +1117,21 @@ internal fun CascadeWizardScreen(
     val entryValid = panels.any { it.id == form.entry }
     val exitValid = panels.any { it.id == form.exit } && form.entry != form.exit
     val address = form.address.trim()
+    fun checkCascadePortAvailability(value: String, entry: Boolean) {
+        if (entry) entryPortAvailable = null else exitPortAvailable = null
+        val port = value.toIntOrNull()?.takeIf { it in 1..65535 } ?: return
+        val panelId = if (entry) form.entry else form.exit
+        if (panelId.isBlank()) return
+        val transports = if (form.protocol in setOf(CascadeProtocol.HYSTERIA2, CascadeProtocol.AMNEZIAWG))
+            setOf(InboundPortTransport.UDP) else setOf(InboundPortTransport.TCP)
+        scope.launch {
+            val available = runCatching { model.wizardPortAvailable(panelId, port, transports) }.getOrNull()
+            val current = model.cascade.value.form
+            if (if (entry) current.entryPort == value else current.exitPort == value) {
+                if (entry) entryPortAvailable = available else exitPortAvailable = available
+            }
+        }
+    }
     fun certificatePathsValid(usePanel: Boolean, certificate: String, key: String): Boolean = usePanel ||
         certificate.trim().startsWith('/') && key.trim().startsWith('/') && certificate.length <= 4096 && key.length <= 4096 &&
             certificate.none { it.isISOControl() } && key.none { it.isISOControl() }
@@ -1003,7 +1151,6 @@ internal fun CascadeWizardScreen(
     fun restartWizard() {
         lastError = null
         addressEdited = false
-        initialized = false
         model.resetCascade()
         step = 0
     }
@@ -1013,7 +1160,7 @@ internal fun CascadeWizardScreen(
             else if (step == 0) onDismiss() else step--
         }
     }
-    ServerUiScreen(onBack = back, backEnabled = !busy, contentKey = step, title = "Мастер настройки каскада") {
+    ServerUiScreen(onBack = back, backEnabled = !busy, contentKey = step, title = "Мастер настройки каскада", clearFocusOnBackgroundTap = true) {
         if (step < 3) ServerUiCaption("Шаг ${step + 1} из 3")
         cascade.journalError?.let { ServerUiError(it) }
         (error ?: lastError)?.takeUnless { it == cascade.journalError }?.let { ServerUiError(it) }
@@ -1063,20 +1210,40 @@ internal fun CascadeWizardScreen(
             }
             2 -> {
                 ServerUiHeading("Настройки")
-                ServerUiField(form.entryPort, { value -> model.updateCascadeForm { it.copy(entryPort = value, entryPortEdited = true) } }, "Порт входа", enabled = editable && form.entryInbound == null, maxLength = 5)
-                if (form.entryInbound == null) { if (form.entryLoading) ServerUiCaption("Проверка порта входа…") else form.entrySuggestion?.let { ServerUiCaption(it) } }
-                ServerUiField(form.exitPort, { value -> model.updateCascadeForm { it.copy(exitPort = value, exitPortEdited = true) } }, "Порт выхода", enabled = editable && form.exitInbound == null, maxLength = 5)
-                if (form.exitInbound == null) { if (form.exitLoading) ServerUiCaption("Проверка порта выхода…") else form.exitSuggestion?.let { ServerUiCaption(it) } }
+                ServerUiField(
+                    form.entryPort,
+                    { value -> entryPortAvailable = null; model.updateCascadeForm { it.copy(entryPort = value, entryPortEdited = true) } },
+                    "Порт входа",
+                    enabled = editable && form.entryInbound == null,
+                    maxLength = 5,
+                    keyboardType = KeyboardType.Number,
+                    defaultValue = form.entryPortDefault,
+                    onFocusLost = { value -> checkCascadePortAvailability(value, entry = true) },
+                )
+                PortAvailabilityLabel(entryPortAvailable)
+                ServerUiField(
+                    form.exitPort,
+                    { value -> exitPortAvailable = null; model.updateCascadeForm { it.copy(exitPort = value, exitPortEdited = true) } },
+                    "Порт выхода",
+                    enabled = editable && form.exitInbound == null,
+                    maxLength = 5,
+                    keyboardType = KeyboardType.Number,
+                    defaultValue = form.exitPortDefault,
+                    onFocusLost = { value -> checkCascadePortAvailability(value, entry = false) },
+                )
+                PortAvailabilityLabel(exitPortAvailable)
                 ServerUiField(form.address, { value -> addressEdited = true; model.updateCascadeForm { it.copy(address = value) } }, "Адрес выходного VPN-сервера", enabled = editable,
-                    hint = "Домен или IP сервера. Адрес панели может указывать на прокси; проверьте его.")
+                    hint = "Домен или IP сервера. Адрес панели может указывать на прокси; проверьте его.", defaultValue = suggestedHost.orEmpty())
                 val sniChoices = remember { InboundDraft().sniChoices().filter { it.isNotBlank() }.distinct() }
                 if (form.protocol == CascadeProtocol.VLESS_REALITY) {
-                    CascadeChoice("Транспорт", form.transport.name, listOf("XHTTP", "TCP"), editable) { value -> model.updateCascadeForm { it.copy(transport = CascadeTransport.valueOf(value)) } }
-                    CascadeChoice("SNI", form.entrySni, sniChoices, editable) { value -> model.updateCascadeForm { it.copy(entrySni = value, exitSni = value) } }
+                    CascadeChoice("Транспорт", form.transport.name, listOf("TCP", "XHTTP"), editable) { value -> model.updateCascadeForm { it.copy(transport = CascadeTransport.valueOf(value)) } }
+                    CascadeChoice("SNI", form.entrySni, sniChoices, editable) { value ->
+                        model.updateCascadeForm { it.copy(entrySni = value, exitSni = value, entrySniDefault = value, exitSniDefault = value) }
+                    }
                     CascadeChoice("Fingerprint", form.fingerprint, InboundDraft.fingerprints.filter { it.isNotBlank() && it != "unsafe" }, editable) { value -> model.updateCascadeForm { it.copy(fingerprint = value) } }
                 } else if (form.protocol == CascadeProtocol.HYSTERIA2) {
                     ServerUiField(form.entrySni, { value -> model.updateCascadeForm { it.copy(entrySni = value) } }, "SNI входного Hysteria2", enabled = editable, maxLength = 253,
-                        hint = "Домен или IP входной панели.")
+                        hint = "Домен или IP входной панели.", defaultValue = form.entrySniDefault)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = form.entryUsePanelCertificate, onCheckedChange = { enabled ->
                             model.updateCascadeForm { it.copy(entryUsePanelCertificate = enabled) }
@@ -1088,7 +1255,7 @@ internal fun CascadeWizardScreen(
                         ServerUiField(form.entryKeyFile, { value -> model.updateCascadeForm { it.copy(entryKeyFile = value) } }, "Key входа", enabled = editable, maxLength = 4096, hint = "Абсолютный путь к key file.")
                     }
                     ServerUiField(form.exitSni, { value -> model.updateCascadeForm { it.copy(exitSni = value) } }, "SNI выходного Hysteria2", enabled = editable, maxLength = 253,
-                        hint = "Домен или IP выходной панели.")
+                        hint = "Домен или IP выходной панели.", defaultValue = form.exitSniDefault)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = form.exitUsePanelCertificate, onCheckedChange = { enabled ->
                             model.updateCascadeForm { it.copy(exitUsePanelCertificate = enabled) }
@@ -1100,17 +1267,19 @@ internal fun CascadeWizardScreen(
                         ServerUiField(form.exitKeyFile, { value -> model.updateCascadeForm { it.copy(exitKeyFile = value) } }, "Key выхода", enabled = editable, maxLength = 4096, hint = "Абсолютный путь к key file.")
                     }
                     ServerUiField(form.hysteriaAlpn, { value -> model.updateCascadeForm { it.copy(hysteriaAlpn = value) } }, "ALPN Hysteria2", enabled = editable, maxLength = 64,
-                        hint = "По умолчанию h3. Firewall и UDP-маршрут между узлами не проверяются автоматически.")
+                        hint = "По умолчанию h3. Firewall и UDP-маршрут между узлами не проверяются автоматически.", defaultValue = "h3")
                 } else {
                     ServerUiCaption("AmneziaWG использует UDP; TLS, SNI и сертификаты не применяются.")
                     ServerUiField(form.awgMtu, { value -> model.updateCascadeForm { it.copy(awgMtu = value) } }, "MTU", enabled = editable, maxLength = 5,
-                        hint = "По умолчанию 1280. Изменяйте только при известной проблеме MTU.")
-                    ServerUiField(form.awgPrimaryDns, { value -> model.updateCascadeForm { it.copy(awgPrimaryDns = value) } }, "Основной DNS", enabled = editable, maxLength = 15)
-                    ServerUiField(form.awgSecondaryDns, { value -> model.updateCascadeForm { it.copy(awgSecondaryDns = value) } }, "Резервный DNS", enabled = editable, maxLength = 15)
+                        hint = "По умолчанию 1280. Изменяйте только при известной проблеме MTU.", defaultValue = "1280")
+                    ServerUiField(form.awgPrimaryDns, { value -> model.updateCascadeForm { it.copy(awgPrimaryDns = value) } }, "Основной DNS", enabled = editable, maxLength = 15, defaultValue = "8.8.8.8")
+                    ServerUiField(form.awgSecondaryDns, { value -> model.updateCascadeForm { it.copy(awgSecondaryDns = value) } }, "Резервный DNS", enabled = editable, maxLength = 15, defaultValue = "1.1.1.1")
                     ServerUiCaption("Ключи, технические peer, подсети и параметры маскировки создаются автоматически. Внешняя UDP-доступность не проверяется автоматически.")
                 }
-                if (entryFlag == null) ServerUiField(form.entryName, { value -> model.updateCascadeForm { it.copy(entryName = value) } }, "Флаг входа", enabled = editable, maxLength = 90, hint = "Флаг страны или код вида :DE:.")
-                if (exitFlag == null) ServerUiField(form.exitName, { value -> model.updateCascadeForm { it.copy(exitName = value) } }, "Флаг выхода", enabled = editable, maxLength = 90, hint = "Флаг страны или код вида :DE:.")
+                if (entryFlag == null) ServerUiField(form.entryName, { value -> model.updateCascadeForm { it.copy(entryName = value) } }, "Флаг входа", enabled = editable, maxLength = 90,
+                    hint = "Флаг страны или код вида :DE:.", defaultValue = form.entryNameDefault)
+                if (exitFlag == null) ServerUiField(form.exitName, { value -> model.updateCascadeForm { it.copy(exitName = value) } }, "Флаг выхода", enabled = editable, maxLength = 90,
+                    hint = "Флаг страны или код вида :DE:.", defaultValue = form.exitNameDefault)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = form.allowRestart, onCheckedChange = { value -> model.updateCascadeForm { it.copy(allowRestart = value) } }, enabled = editable)
                     ServerUiCaption("Разрешаю перезапуск Xray на обеих панелях и временный разрыв подключений")

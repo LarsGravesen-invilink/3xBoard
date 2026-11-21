@@ -185,15 +185,47 @@ class PanelApi {
         val client = draft.payload(inbound)
         val deadline = System.nanoTime() + 15_000L * 1_000_000
         try {
-            val body = JSONObject().put("client", client).put("inboundIds", JSONArray().put(inbound.id))
-            request(validated, "panel/api/clients/add", deadline, 15_000, body.toString())
-        } catch (failure: PanelApiFailure) {
-            if (failure.statusCode != 404 && failure.statusCode != 405) throw failure
-            val settings = JSONObject().put("clients", JSONArray().put(client))
-            val body = "id=${inbound.id}&settings=${encode(settings.toString())}"
-            request(validated, "panel/api/inbounds/addClient", deadline, 15_000, body, "application/x-www-form-urlencoded")
+            try {
+                val body = JSONObject().put("client", client).put("inboundIds", JSONArray().put(inbound.id))
+                request(validated, "panel/api/clients/add", deadline, 15_000, body.toString())
+            } catch (failure: PanelApiFailure) {
+                if (failure.statusCode != 404 && failure.statusCode != 405) throw failure
+                val settings = JSONObject().put("clients", JSONArray().put(client))
+                val body = "id=${inbound.id}&settings=${encode(settings.toString())}"
+                request(validated, "panel/api/inbounds/addClient", deadline, 15_000, body, "application/x-www-form-urlencoded")
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            val cleanup = runCatching { cleanupUnconfirmedCreatedClient(validated, inbound, client) }
+            when {
+                cleanup.getOrNull() == true -> throw IllegalStateException(
+                    "Создание клиента не подтверждено, но совпадающий созданный клиент удалён автоматически.", failure,
+                )
+                cleanup.isFailure -> throw IllegalStateException(
+                    "Создание клиента не подтверждено и автоматическая очистка не подтверждена: ${cleanup.exceptionOrNull()?.message.orEmpty()}", failure,
+                )
+                else -> throw failure
+            }
         }
         Unit
+    }
+
+    private suspend fun cleanupUnconfirmedCreatedClient(config: PanelConfig, inbound: InboundDetail, expected: JSONObject): Boolean {
+        val email = expected.optString("email").takeIf { it.isNotBlank() } ?: return false
+        val raw = runCatching { offlineClient(config, email) }.getOrNull() ?: return false
+        val session = ClientEditSession.fromResponse(raw)
+        if (inbound.id !in session.inboundIds) return false
+        val actual = session.draft.payload(inbound)
+        val identityFields = listOf("id", "subId", "password", "auth", "privateKey", "publicKey", "preSharedKey", "secret")
+            .filter { key -> expected.optString(key).isNotBlank() }
+        if (identityFields.isEmpty() || identityFields.any { key -> expected.optString(key) != actual.optString(key) }) return false
+        offlineDelete(config, null, email)
+        val clients = offlineSnapshot(config).second ?: return false
+        check((0 until clients.length()).none { index -> clients.getJSONObject(index).optString("email") == email }) {
+            "Удаление совпадающего клиента не подтверждено."
+        }
+        return true
     }
 
     suspend fun clientEditSession(config: PanelConfig, email: String): ClientEditSession = withContext(Dispatchers.IO) {

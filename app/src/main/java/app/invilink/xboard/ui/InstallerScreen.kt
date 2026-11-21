@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -43,10 +44,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -378,10 +381,12 @@ internal fun ServerUiScreen(
     backEnabled: Boolean = true,
     contentKey: Any? = Unit,
     title: String? = null,
+    clearFocusOnBackgroundTap: Boolean = false,
     fixedContent: (@Composable ColumnScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = LocalXBoardPalette.current
+    val focusManager = LocalFocusManager.current
     val scrollState = if (title != null) remember(contentKey) { ScrollState(0) } else rememberScrollState()
     BackHandler { if (backEnabled) onBack() }
     Surface(Modifier.fillMaxSize(), color = palette.background) {
@@ -406,6 +411,9 @@ internal fun ServerUiScreen(
             Column(
                 Modifier.weight(1f).align(Alignment.CenterHorizontally).widthIn(max = 680.dp)
                     .fillMaxWidth().verticalScroll(scrollState)
+                    .then(if (clearFocusOnBackgroundTap) Modifier.pointerInput(Unit) {
+                        detectTapGestures(onTap = { focusManager.clearFocus() })
+                    } else Modifier)
                     .padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
             ) {
@@ -553,9 +561,12 @@ internal fun ServerUiField(
     maxLength: Int = 4096,
     keyboardType: KeyboardType = KeyboardType.Text,
     hint: String? = null,
+    defaultValue: String? = null,
+    onFocusLost: ((String) -> Unit)? = null,
 ) {
     val palette = LocalXBoardPalette.current
     var visible by remember { mutableStateOf(false) }
+    var wasFocused by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = value,
         onValueChange = { if (it.length <= maxLength) onValue(it) },
@@ -563,6 +574,14 @@ internal fun ServerUiField(
         minLines = if (multiline) 6 else 1,
         maxLines = if (multiline) 12 else 1,
         modifier = Modifier.fillMaxWidth().heightIn(min = if (multiline) 176.dp else 56.dp)
+            .onFocusChanged { focusState ->
+                if (wasFocused && !focusState.isFocused) {
+                    val restored = if (value.isBlank()) defaultValue ?: value else value
+                    if (restored != value) onValue(restored)
+                    onFocusLost?.invoke(restored)
+                }
+                wasFocused = focusState.isFocused
+            }
             .semantics { if (secret && !visible) password() },
         textStyle = MaterialTheme.typography.bodyLarge.copy(
             fontFamily = if (multiline) FontFamily.Monospace else MaterialTheme.typography.bodyLarge.fontFamily,

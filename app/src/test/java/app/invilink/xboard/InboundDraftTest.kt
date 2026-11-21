@@ -11,6 +11,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class InboundDraftTest {
+    @Test fun newInboundDefaultsToMonthlyTrafficResetOnFirstDay() {
+        val payload = InboundDraft.create().payload()
+        assertEquals("monthly", payload.getString("trafficReset"))
+        assertEquals(1, payload.getInt("trafficResetDay"))
+    }
+
     @Test fun acceptsExplicitNullOptionalSettingsWithoutWeakeningRequiredFields() {
         for (protocol in listOf("vless", "vmess", "trojan", "amneziawg")) {
             val row = InboundDraft.create().update("protocol", protocol).payload().put("id", 42)
@@ -144,6 +150,17 @@ class InboundDraftTest {
         assertEquals(original.streamSettings, changed.streamSettings)
         assertEquals(original.protocolSettings, changed.protocolSettings)
         assertEquals(original.sniffing, changed.sniffing)
+    }
+
+    @Test
+    fun selectingRealitySniImmediatelyUpdatesDependentFields() {
+        val selected = reality().update("sniCandidates", "example.test,new.example.test")
+            .update("sniMode", "new.example.test")
+        val reality = JSONObject(selected.streamSettings).getJSONObject("realitySettings")
+
+        assertEquals("new.example.test", selected.sniMode)
+        assertEquals("new.example.test", reality.getJSONArray("serverNames").getString(0))
+        assertEquals("new.example.test:443", reality.getString("target"))
     }
 
     @Test

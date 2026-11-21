@@ -3,6 +3,7 @@ package app.invilink.xboard.panels
 import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -82,6 +83,7 @@ internal data class CascadeMetadata(
     val protocol: CascadeProtocol = CascadeProtocol.VLESS_REALITY,
     val technicalAuth: String? = null,
     val transport: CascadeTransport = CascadeTransport.TCP,
+    val cleanupPending: Boolean = false,
 ) {
     override fun toString(): String = "CascadeMetadata(id=$id, step=$step, inFlight=$inFlight, snapshots=[REDACTED])"
 }
@@ -115,7 +117,7 @@ internal fun nextCascadeHealth(previous: CascadeHealth?, eventId: Long, complete
         healthy -> CascadeGlow.NORMAL
         else -> CascadeGlow.UNKNOWN
     }
-    return CascadeHealth(eventId, completedAt, failures, red, glow, probe.latencyMillis)
+    return CascadeHealth(eventId, completedAt, failures, red, glow, probe.latencyMillis ?: previous?.latencyMillis)
 }
 
 internal fun cascadeIconColorIndex(id: String, colorCount: Int): Int {
@@ -241,6 +243,7 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
         synchronized(lock) {
             val previous = checkNotNull(read(metadata.id)) { "Запись каскада отсутствует." }
             require(previous.copy(step = metadata.step, inFlight = metadata.inFlight, result = metadata.result,
+                cleanupPending = metadata.cleanupPending,
                 entryInboundId = metadata.entryInboundId, exitInboundId = metadata.exitInboundId,
                 entryExpectedSnapshot = metadata.entryExpectedSnapshot, exitExpectedSnapshot = metadata.exitExpectedSnapshot) == metadata)
             require(previous.entryExpectedSnapshot == null || previous.entryExpectedSnapshot == metadata.entryExpectedSnapshot)
@@ -253,7 +256,7 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
             require(previous.exitInboundId == null || previous.exitInboundId == metadata.exitInboundId)
             val sameStep = metadata.step == previous.step
             val nextStep = metadata.step.ordinal == previous.step.ordinal + 1
-            require((sameStep && (previous.inFlight != metadata.inFlight)) ||
+            require((sameStep && (previous.inFlight != metadata.inFlight || previous.cleanupPending != metadata.cleanupPending)) ||
                 (nextStep && !previous.inFlight && (metadata.inFlight || metadata.step == CascadeStep.COMPLETE)))
             require(metadata.step.ordinal < CascadeStep.ENTRY_CLIENT.ordinal || metadata.entryInboundId != null)
             require(metadata.step.ordinal < CascadeStep.EXIT_CLIENT.ordinal || metadata.exitInboundId != null)
@@ -295,7 +298,8 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
             if (obj.isNull("exitExpectedSnapshot")) null else text("exitExpectedSnapshot"),
             if (obj.has("protocol")) CascadeProtocol.valueOf(text("protocol")) else CascadeProtocol.VLESS_REALITY,
             if (obj.isNull("technicalAuth")) null else text("technicalAuth"),
-            if (obj.has("transport")) CascadeTransport.valueOf(text("transport")) else CascadeTransport.TCP)
+            if (obj.has("transport")) CascadeTransport.valueOf(text("transport")) else CascadeTransport.TCP,
+            obj.optBoolean("cleanupPending", false))
         require(metadata.id == id)
         validate(metadata)
         return metadata
@@ -317,7 +321,7 @@ internal class PersistentCascadeJournal(context: Context) : CascadeJournal {
             .put("exitExpectedSnapshot", m.exitExpectedSnapshot ?: JSONObject.NULL)
             .put("protocol", m.protocol.name)
             .put("technicalAuth", m.technicalAuth ?: JSONObject.NULL)
-            .put("transport", m.transport.name).toString()
+            .put("transport", m.transport.name).put("cleanupPending", m.cleanupPending).toString()
         require(raw.length <= 262144) { "Снимок инбаунда слишком велик для журнала." }
         check(preferences.edit().putString(m.id, raw).commit()) { "Не удалось сохранить журнал каскадов." }
         check(read(m.id) == m) { "Не удалось подтвердить запись журнала каскадов." }
@@ -378,14 +382,78 @@ internal interface CascadePanelGateway {
     /** Null means no test was performed. True is reserved for a successful end-to-end test. */
     suspend fun verify(request: CascadeRequest, metadata: CascadeMetadata): Boolean? = null
     suspend fun cleanup(metadata: CascadeMetadata) { error("Удаление каскада не поддерживается.") }
+    /** Deletes an unambiguously identified inbound created by this operation. */
+    suspend fun cleanupCreatedInbound(panelId: String, draft: InboundDraft) { error("Очистка созданного инбаунда не поддерживается.") }
     suspend fun createInbound(panelId: String, draft: InboundDraft): Long
     suspend fun createClient(panelId: String, inboundId: Long, client: ClientDraft)
     suspend fun installRouting(panelId: String, inboundTag: String, outboundTag: String, outbound: String)
 }
 
-internal fun cascadeInboundUsesUdp(inbound: InboundDetail): Boolean = inbound.protocol.lowercase() in setOf(
-    "hysteria", "hysteria2", "tuic", "wireguard", "amneziawg", "shadowsocks"
-) || inbound.network.lowercase() in setOf("hysteria", "quic", "kcp")
+/** Retries only temporary panel unavailability while a creation operation is in progress. */
+internal class RetryingCascadePanelGateway(
+    private val delegate: CascadePanelGateway,
+    private val unavailableTimeoutMillis: Long = 120_000L,
+) : CascadePanelGateway {
+    private var unavailableSinceMillis: Long? = null
+    private var retryExpired = false
+
+    private suspend fun <T> call(action: suspend () -> T): T {
+        while (true) {
+            try {
+                return action()
+            } catch (failure: PanelApiFailure) {
+                if (failure.availability != PanelAvailability.OFFLINE || retryExpired) throw failure
+                val now = System.currentTimeMillis()
+                val since = unavailableSinceMillis ?: now.also { unavailableSinceMillis = it }
+                val remaining = unavailableTimeoutMillis - (now - since)
+                if (remaining <= 0L) {
+                    retryExpired = true
+                    throw failure
+                }
+                delay(minOf(2_000L, remaining))
+            }
+        }
+    }
+
+    override suspend fun preflight(request: CascadeRequest) = call { delegate.preflight(request) }
+    override suspend fun occupiedNames(panelId: String): CascadeOccupiedNames = call { delegate.occupiedNames(panelId) }
+    override suspend fun suggestedPorts(panelId: String, candidates: List<Int>): List<Int> = call { delegate.suggestedPorts(panelId, candidates) }
+    override suspend fun suggestedUdpPorts(panelId: String, candidates: List<Int>): List<Int> = call { delegate.suggestedUdpPorts(panelId, candidates) }
+    override suspend fun snapshotExistingInbound(panelId: String, inboundId: Long, port: Int): String =
+        call { delegate.snapshotExistingInbound(panelId, inboundId, port) }
+    override suspend fun updateExistingInbound(panelId: String, snapshot: String, draft: InboundDraft): Long =
+        call { delegate.updateExistingInbound(panelId, snapshot, draft) }
+    override suspend fun captureInbound(panelId: String, inboundId: Long, draft: InboundDraft, client: ClientDraft): String =
+        call { delegate.captureInbound(panelId, inboundId, draft, client) }
+    override suspend fun readInbound(panelId: String, inboundId: Long): InboundDraft = call { delegate.readInbound(panelId, inboundId) }
+    override suspend fun restartAndCheck(panelId: String) = call { delegate.restartAndCheck(panelId) }
+    override suspend fun verifyConfiguration(request: CascadeRequest, metadata: CascadeMetadata,
+        entry: InboundDraft, entryClient: ClientDraft, exit: InboundDraft, exitClient: ClientDraft, outbound: String) =
+        call { delegate.verifyConfiguration(request, metadata, entry, entryClient, exit, exitClient, outbound) }
+    override suspend fun verify(request: CascadeRequest, metadata: CascadeMetadata): Boolean? = call { delegate.verify(request, metadata) }
+    override suspend fun cleanup(metadata: CascadeMetadata) = call { delegate.cleanup(metadata) }
+    override suspend fun cleanupCreatedInbound(panelId: String, draft: InboundDraft) = call { delegate.cleanupCreatedInbound(panelId, draft) }
+    override suspend fun createInbound(panelId: String, draft: InboundDraft): Long = call { delegate.createInbound(panelId, draft) }
+    override suspend fun createClient(panelId: String, inboundId: Long, client: ClientDraft) =
+        call { delegate.createClient(panelId, inboundId, client) }
+    override suspend fun installRouting(panelId: String, inboundTag: String, outboundTag: String, outbound: String) =
+        call { delegate.installRouting(panelId, inboundTag, outboundTag, outbound) }
+}
+
+internal enum class InboundPortTransport { TCP, UDP }
+
+internal fun inboundPortTransports(inbound: InboundDetail): Set<InboundPortTransport> {
+    val protocol = inbound.protocol.lowercase()
+    return when {
+        protocol == "shadowsocks" -> setOf(InboundPortTransport.TCP, InboundPortTransport.UDP)
+        protocol in setOf("hysteria", "hysteria2", "tuic", "wireguard", "amneziawg") ||
+            inbound.network.lowercase() in setOf("hysteria", "quic", "kcp") -> setOf(InboundPortTransport.UDP)
+        else -> setOf(InboundPortTransport.TCP)
+    }
+}
+
+internal fun cascadeInboundUsesUdp(inbound: InboundDetail): Boolean =
+    InboundPortTransport.UDP in inboundPortTransports(inbound)
 
 /** Resolves credentials on demand; callers must explicitly construct and invoke this gateway. */
 internal class PanelApiCascadeGateway(
@@ -402,8 +470,9 @@ internal class PanelApiCascadeGateway(
         for ((panel, port, selectedId) in listOf(Triple(entry, request.entryPort, request.entryInboundId), Triple(exit, request.exitPort, request.exitInboundId))) {
             check(api.isXrayRunning(panel)) { "Xray не работает на одной из панелей." }
             val rows = api.inbounds(panel)
-            require(rows.none { it.port == port && it.id != selectedId &&
-                (request.protocol != CascadeProtocol.HYSTERIA2 || cascadeInboundUsesUdp(it)) }) {
+            val requiredTransport = if (request.protocol in setOf(CascadeProtocol.HYSTERIA2, CascadeProtocol.AMNEZIAWG))
+                InboundPortTransport.UDP else InboundPortTransport.TCP
+            require(rows.none { it.port == port && it.id != selectedId && requiredTransport in inboundPortTransports(it) }) {
                 "Порт уже используется инбаундом с тем же транспортом."
             }
         }
@@ -493,7 +562,7 @@ internal class PanelApiCascadeGateway(
 
     override suspend fun suggestedPorts(panelId: String, candidates: List<Int>): List<Int> {
         require(candidates.size <= 1024 && candidates.all { it in 1..65535 })
-        val used = api.inbounds(config(panelId)).map { it.port }.toSet()
+        val used = api.inbounds(config(panelId)).filter { InboundPortTransport.TCP in inboundPortTransports(it) }.map { it.port }.toSet()
         return candidates.distinct().filterNot { it in used }
     }
 
@@ -565,17 +634,42 @@ internal class PanelApiCascadeGateway(
 
     override suspend fun cleanup(metadata: CascadeMetadata) = cleanupSide(metadata, entry = true, exit = true)
 
+    override suspend fun cleanupCreatedInbound(panelId: String, draft: InboundDraft) {
+        val payload = draft.payload()
+        val tag = payload.getString("tag")
+        val panel = config(panelId)
+        val rows = api.offlineSnapshot(panel).first
+        val row = cascadeCreatedInboundForDeletion(rows, null, tag, draft.name) ?: return
+        val id = row.getLong("id")
+        api.offlineDelete(panel, id, null)
+        check(api.inbounds(panel).none { it.id == id }) { "Удаление созданного инбаунда не подтверждено." }
+    }
+
     internal suspend fun cleanupSide(metadata: CascadeMetadata, entry: Boolean, exit: Boolean) {
-        if (metadata.inFlight) {
-            if (!entry) return
-            require(metadata.step in setOf(CascadeStep.ENTRY_INBOUND, CascadeStep.ENTRY_CLIENT) && metadata.entryInboundCreated) {
-                "Незавершённая операция находится после безопасного этапа очистки; проверьте панели вручную."
-            }
-            val panel = config(metadata.entryPanelId)
+        suspend fun removeCreatedInbound(panelId: String, id: Long?, tag: String, name: String) {
+            val panel = config(panelId)
             val rows = api.offlineSnapshot(panel).first
-            val row = cascadeCreatedInboundForDeletion(rows, metadata.entryInboundId, metadata.entryTag, metadata.entryInboundName) ?: return
-            api.offlineDelete(panel, row.getLong("id"), null)
-            check(api.inbounds(panel).none { it.id == row.getLong("id") }) { "Удаление неподтверждённого инбаунда не подтверждено." }
+            val row = cascadeCreatedInboundForDeletion(rows, id, tag, name) ?: return
+            val actualId = row.getLong("id")
+            val freshRows = api.offlineSnapshot(panel).first
+            if (cascadeCreatedInboundForDeletion(freshRows, actualId, tag, name) == null) return
+            // Deleting the inbound detaches its clients. Do not call the global client-delete
+            // endpoint: a client can also belong to other inbounds.
+            api.offlineDelete(panel, actualId, null)
+            check(api.inbounds(panel).none { it.id == actualId }) { "Удаление инбаунда не подтверждено." }
+        }
+        if (metadata.inFlight) {
+            require(metadata.entryInboundCreated && metadata.exitInboundCreated &&
+                metadata.entryInboundSnapshot == null && metadata.exitInboundSnapshot == null) {
+                "Незавершённая операция изменила существующий инбаунд; журнал сохранён для безопасного восстановления."
+            }
+            if (entry && metadata.step.ordinal >= CascadeStep.ROUTING.ordinal) {
+                val entryPanel = config(metadata.entryPanelId)
+                api.removeCascadeRouting(entryPanel, metadata.entryTag, metadata.outboundTag)
+            }
+            if (exit && metadata.step.ordinal >= CascadeStep.EXIT_INBOUND.ordinal)
+                removeCreatedInbound(metadata.exitPanelId, metadata.exitInboundId, metadata.exitTag, metadata.exitInboundName)
+            if (entry) removeCreatedInbound(metadata.entryPanelId, metadata.entryInboundId, metadata.entryTag, metadata.entryInboundName)
             return
         }
         // Existing inbounds are restored only when their current configuration still matches
@@ -646,23 +740,10 @@ internal class PanelApiCascadeGateway(
                 routingFailure = failure
             }
         }
-        suspend fun removeInbound(panelId: String, id: Long?, tag: String, name: String) {
-            check(!privateName(name)) { "Скрытый инбаунд сохранён; проверьте его вручную." }
-            val panel = config(panelId)
-            val rows = api.offlineSnapshot(panel).first
-            val row = cascadeCreatedInboundForDeletion(rows, id, tag, name) ?: return
-            val actualId = row.getLong("id")
-            val freshRows = api.offlineSnapshot(panel).first
-            if (cascadeCreatedInboundForDeletion(freshRows, actualId, tag, name) == null) return
-            // Deleting the inbound detaches its clients. Do not call the global client-delete
-            // endpoint: a client can also belong to other inbounds.
-            api.offlineDelete(panel, actualId, null)
-            check(api.inbounds(panel).none { it.id == actualId }) { "Удаление инбаунда не подтверждено." }
-        }
         if (exit && metadata.exitInboundCreated && metadata.step.ordinal >= CascadeStep.EXIT_INBOUND.ordinal)
-            removeInbound(metadata.exitPanelId, metadata.exitInboundId, metadata.exitTag, metadata.exitInboundName)
+            removeCreatedInbound(metadata.exitPanelId, metadata.exitInboundId, metadata.exitTag, metadata.exitInboundName)
         if (entry && metadata.entryInboundCreated)
-            removeInbound(metadata.entryPanelId, metadata.entryInboundId, metadata.entryTag, metadata.entryInboundName)
+            removeCreatedInbound(metadata.entryPanelId, metadata.entryInboundId, metadata.entryTag, metadata.entryInboundName)
         if (exit && !metadata.exitInboundCreated && metadata.step.ordinal >= CascadeStep.EXIT_INBOUND.ordinal)
             restartAndCheck(metadata.exitPanelId)
         if (entry && !metadata.entryInboundCreated && metadata.step.ordinal < CascadeStep.ROUTING.ordinal)
@@ -678,6 +759,17 @@ internal class PanelApiCascadeGateway(
         val panel = config(panelId)
         val expected = draft.payload()
         val tag = expected.getString("tag")
+        suspend fun confirmedCreated(): Long? {
+            val candidates = api.inbounds(panel).filter { it.name == draft.name && it.port == expected.getInt("port") && it.protocol == expected.getString("protocol") }
+            for (candidate in candidates) {
+                val actual = api.offlineInbound(panel, candidate.id)
+                if (actual.optString("tag") == tag && actual.optString("remark") == draft.name &&
+                    actual.optInt("port") == expected.getInt("port") && actual.optString("protocol") == expected.getString("protocol") &&
+                    actual.optBoolean("enable") == expected.getBoolean("enable")) return candidate.id
+            }
+            return null
+        }
+        confirmedCreated()?.let { return it }
         val before = api.inbounds(panel)
         require(before.none { nameKey(it.name) == nameKey(draft.name) ||
             (it.port == expected.getInt("port") && (draft.protocol != "hysteria" || cascadeInboundUsesUdp(it))) }) {
@@ -715,6 +807,7 @@ internal class PanelApiCascadeGateway(
         val inbound = api.inbounds(panel).single { it.id == inboundId }
         val expected = client.payload(inbound)
         val email = expected.getString("email")
+        if (cascadeInboundClientMatches(api.offlineInbound(panel, inboundId), expected)) return
         require(occupiedNames(panelId).clients.none { nameKey(it) == nameKey(email) }) { "Клиент уже существует." }
         api.createClient(panel, inbound, client)
         val confirmed = api.offlineInbound(panel, inboundId)
@@ -724,7 +817,9 @@ internal class PanelApiCascadeGateway(
     }
 
     override suspend fun installRouting(panelId: String, inboundTag: String, outboundTag: String, outbound: String) {
-        api.installCascadeRouting(config(panelId), inboundTag, outboundTag, outbound)
+        val panel = config(panelId)
+        if (cascadeRoutingMatches(JSONObject(api.xrayRouting(panel).template), inboundTag, outboundTag, JSONObject(outbound))) return
+        api.installCascadeRouting(panel, inboundTag, outboundTag, outbound)
     }
 }
 
@@ -759,7 +854,6 @@ internal fun requireCascadeReusableInbound(inbound: JSONObject, clients: JSONArr
 }
 
 internal fun cascadeCreatedInboundForDeletion(rows: JSONArray, id: Long?, tag: String, name: String): JSONObject? {
-    if (privateName(name)) return null
     require(tag.isNotBlank() && name.isNotBlank()) { "Владение инбаундом не подтверждено; журнал сохранён." }
     val all = (0 until rows.length()).map { rows.optJSONObject(it) ?: error("Некорректный список инбаундов; журнал сохранён.") }
     if (id == null) {
@@ -775,7 +869,6 @@ internal fun cascadeCreatedInboundForDeletion(rows: JSONArray, id: Long?, tag: S
     val matches = all.filter { it.optString("tag") == tag || it.optLong("id") == id }
     require(matches.size <= 1) { "ID или тег инбаунда занят другой записью; журнал сохранён." }
     val row = matches.singleOrNull() ?: return null
-    if (privateName(row.optString("remark"))) return null
     require(row.optLong("id") == id && row.optString("tag") == tag && row.optString("remark") == name) {
         "Владение инбаундом не подтверждено или инбаунд изменён; журнал сохранён."
     }
@@ -1303,11 +1396,12 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
     suspend fun suggestedHysteriaUdpPorts(panelId: String): List<Int> = gateway.suggestedUdpPorts(panelId, hysteriaUdpPortCandidates())
 
     suspend fun remove(metadata: CascadeMetadata) {
-        check(!metadata.inFlight || metadata.step in setOf(CascadeStep.ENTRY_INBOUND, CascadeStep.ENTRY_CLIENT) && metadata.entryInboundCreated) {
-            "Результат незавершённой операции неизвестен; автоматическая очистка запрещена. Проверьте панели вручную."
+        check(!metadata.inFlight || metadata.entryInboundCreated && metadata.exitInboundCreated &&
+            metadata.entryInboundSnapshot == null && metadata.exitInboundSnapshot == null) {
+            "Незавершённая операция изменила существующий инбаунд; журнал сохранён для безопасного восстановления."
         }
         check(metadata.entryInboundId != null || metadata.step == CascadeStep.ENTRY_INBOUND) { "ID входного инбаунда неизвестен; журнал сохранён." }
-        check(metadata.exitInboundId != null || metadata.step.ordinal < CascadeStep.EXIT_INBOUND.ordinal) { "ID выходного инбаунда неизвестен; журнал сохранён." }
+        check(metadata.exitInboundId != null || metadata.step.ordinal < CascadeStep.EXIT_INBOUND.ordinal || metadata.exitInboundCreated) { "ID выходного инбаунда неизвестен; журнал сохранён." }
         check((metadata.entryInboundCreated || metadata.entryInboundId == null || metadata.entryExpectedSnapshot != null) &&
             (metadata.exitInboundCreated || metadata.exitInboundId == null || metadata.exitExpectedSnapshot != null)) {
             "Нет ожидаемого снимка существующего инбаунда; восстановите его вручную, журнал сохранён."
@@ -1514,8 +1608,8 @@ internal class CascadeService(private val gateway: CascadePanelGateway, private 
             throw cancelled
         } catch (failure: Exception) {
             val rollback = runCatching { remove(metadata) }
-            if (rollback.isSuccess) throw IllegalStateException("Ошибка на этапе ${metadata.step}: ${failure.message.orEmpty()}. Очистка выполнена best effort; проверьте обе панели. Скрытые созданные инбаунды могли остаться.", failure)
-            val guidance = "Автоматическая очистка не завершена: ${rollback.exceptionOrNull()?.message.orEmpty()}. Проверьте панели и журнал вручную."
+            if (rollback.isSuccess) throw IllegalStateException("Ошибка на этапе ${metadata.step}: ${failure.message.orEmpty()}. Созданные элементы удалены автоматически.", failure)
+            val guidance = "Автоматическая очистка не подтверждена: ${rollback.exceptionOrNull()?.message.orEmpty()}. Запись сохранена и очистка будет повторена при доступности панелей."
             throw IllegalStateException("Ошибка на этапе ${metadata.step}: ${failure.message.orEmpty()}. $guidance", failure)
         }
     }

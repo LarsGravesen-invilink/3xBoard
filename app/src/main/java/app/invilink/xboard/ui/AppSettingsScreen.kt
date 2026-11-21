@@ -1,11 +1,11 @@
 package app.invilink.xboard.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.LinearProgressIndicator
 import app.invilink.xboard.UpdateUiState
 import app.invilink.xboard.ProtectionMenuSettings
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -66,30 +67,85 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun UpdateSheet(state: UpdateUiState, onDismiss: (Boolean) -> Unit, onDownload: () -> Unit,
     onCancel: () -> Unit, onInstall: () -> Unit) {
     if (!state.visible) return
-    ModalBottomSheet(onDismissRequest = { onDismiss(false) }) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Обновление приложения", style = MaterialTheme.typography.titleLarge)
-            state.release?.let { Text("Доступна версия ${it.version.text}") }
-            state.message?.let { Text(it) }
-            if (state.downloading) {
-                LinearProgressIndicator(progress = { state.progress / 100f }, modifier = Modifier.fillMaxWidth())
-                Text("${state.progress}%")
-                BoardTextButton(onClick = onCancel) { Text("Отменить загрузку") }
-            } else if (state.busy) {
-                Text("Проверка…")
-            } else {
-                if (state.ready) BoardButton(onClick = onInstall) { Text("Установить") }
-                else if (state.release != null) BoardButton(onClick = onDownload) { Text("Скачать") }
-                if (state.release != null) BoardTextButton(onClick = { onDismiss(true) }) { Text("Отложить на 24 часа") }
-                else BoardTextButton(onClick = { onDismiss(false) }) { Text("Закрыть") }
+    val palette = LocalXBoardPalette.current
+    val progress by animateFloatAsState(
+        targetValue = state.progress.coerceIn(0, 100) / 100f,
+        animationSpec = tween(280),
+        label = "updateDownloadProgress",
+    )
+    fun megabytes(value: Long) = "${value / (1024 * 1024)} МБ"
+    Dialog(
+        onDismissRequest = { onDismiss(false) },
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.Inherit),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().widthIn(max = 520.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = palette.background,
+            border = BorderStroke(1.dp, palette.line),
+        ) {
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    if (state.downloading) "Загрузка обновления" else "Новая версия 3xBoard",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = palette.foreground,
+                )
+                state.release?.let { release ->
+                    Text(
+                        "Версия ${release.version.text} готова к установке",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = palette.secondary,
+                    )
+                }
+                state.message?.let { message ->
+                    Text(message, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                }
+                when {
+                    state.downloading -> {
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth().height(12.dp).clip(RoundedCornerShape(50)),
+                            color = palette.accent,
+                            trackColor = palette.soft,
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${state.progress}%", style = MaterialTheme.typography.titleMedium, color = palette.foreground)
+                            Text(
+                                "${megabytes(state.downloadedBytes)} / ${megabytes(state.totalBytes)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = palette.secondary,
+                            )
+                        }
+                        ServerUiPrimaryButton("Продолжить работу", { onDismiss(false) })
+                        BoardTextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                            Text("Отменить загрузку", textAlign = TextAlign.Center)
+                        }
+                    }
+                    state.busy -> Text("Проверяем доступную версию…", style = MaterialTheme.typography.bodyLarge, color = palette.secondary)
+                    state.ready -> {
+                        ServerUiPrimaryButton("Установить обновление", onInstall)
+                        BoardTextButton(onClick = { onDismiss(false) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Позже", textAlign = TextAlign.Center)
+                        }
+                    }
+                    state.release != null -> {
+                        ServerUiPrimaryButton("Обновить", onDownload)
+                        BoardTextButton(onClick = { onDismiss(true) }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Напомнить завтра", textAlign = TextAlign.Center)
+                        }
+                    }
+                    else -> BoardTextButton(onClick = { onDismiss(false) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Закрыть", textAlign = TextAlign.Center)
+                    }
+                }
             }
-            Spacer(Modifier.height(16.dp))
         }
     }
 }

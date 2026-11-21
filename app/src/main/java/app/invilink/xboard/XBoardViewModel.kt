@@ -12,6 +12,7 @@ import androidx.biometric.BiometricManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.invilink.xboard.panels.PanelApi
+import app.invilink.xboard.panels.PanelApiFailure
 import app.invilink.xboard.panels.CascadeRequest
 import app.invilink.xboard.panels.CascadeSettingsSynchronizer
 import app.invilink.xboard.panels.CascadeRecoveryJournal
@@ -33,6 +34,7 @@ import app.invilink.xboard.panels.CascadeJournal
 import app.invilink.xboard.panels.CascadeService
 import app.invilink.xboard.panels.CascadeCreationException
 import app.invilink.xboard.panels.PanelApiCascadeGateway
+import app.invilink.xboard.panels.RetryingCascadePanelGateway
 import app.invilink.xboard.panels.PersistentCascadeJournal
 import app.invilink.xboard.panels.OfflinePanelRepository
 import app.invilink.xboard.panels.PanelSyncScheduler
@@ -42,6 +44,8 @@ import app.invilink.xboard.panels.PanelMetrics
 import app.invilink.xboard.panels.panelDisplayName
 import app.invilink.xboard.panels.visiblePanelInbounds
 import app.invilink.xboard.panels.PanelAvailability
+import app.invilink.xboard.panels.InboundPortTransport
+import app.invilink.xboard.panels.inboundPortTransports
 import app.invilink.xboard.panels.generateClientValues
 import java.net.URI
 import java.util.Locale
@@ -142,16 +146,17 @@ internal data class CascadeForm(
     val hideEntry: Boolean = false, val hideExit: Boolean = false,
     val entryInbound: CascadeInboundSelection? = null, val exitInbound: CascadeInboundSelection? = null,
     val entry: String = "", val exit: String = "",
-    val entryPort: String = "", val exitPort: String = "", val address: String = "",
-    val entrySni: String = InboundDraft().sniChoices().first(),
-    val exitSni: String = InboundDraft().sniChoices().first(),
+    val entryPort: String = "", val exitPort: String = "", val entryPortDefault: String = "", val exitPortDefault: String = "",
+    val address: String = "",
+    val entrySni: String = InboundDraft().sniChoices().first(), val exitSni: String = InboundDraft().sniChoices().first(),
+    val entrySniDefault: String = InboundDraft().sniChoices().first(), val exitSniDefault: String = InboundDraft().sniChoices().first(),
     val transport: CascadeTransport = CascadeTransport.TCP, val protocol: CascadeProtocol = CascadeProtocol.VLESS_REALITY,
     val fingerprint: String = "chrome", val hysteriaAlpn: String = "h3",
     val entryUsePanelCertificate: Boolean = true, val exitUsePanelCertificate: Boolean = true,
     val entryCertificateFile: String = "", val entryKeyFile: String = "",
     val exitCertificateFile: String = "", val exitKeyFile: String = "",
     val awgMtu: String = "1280", val awgPrimaryDns: String = "8.8.8.8", val awgSecondaryDns: String = "1.1.1.1",
-    val entryName: String = "", val exitName: String = "",
+    val entryName: String = "", val exitName: String = "", val entryNameDefault: String = "", val exitNameDefault: String = "",
     val allowRestart: Boolean = false,
     val entrySuggestion: String? = null, val exitSuggestion: String? = null,
     val entryLoading: Boolean = false, val exitLoading: Boolean = false,
@@ -182,6 +187,8 @@ data class UpdateUiState(
     val busy: Boolean = false,
     val downloading: Boolean = false,
     val progress: Int = 0,
+    val downloadedBytes: Long = 0,
+    val totalBytes: Long = 0,
     val release: UpdateRelease? = null,
     val ready: Boolean = false,
     val message: String? = null,
@@ -274,14 +281,18 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
     ))
     private fun withClientDisplayNames(model: ScreenModel): ScreenModel {
         val panelId = model.activePanelId ?: return model
+        val visibleInbounds = visiblePanelInbounds(model.inbounds, unlockAllEnabled = model.unlockAllEnabled)
         fun named(client: app.invilink.xboard.panels.ClientDetail): app.invilink.xboard.panels.ClientDetail {
             val alias = client.subId.takeIf { it.isNotBlank() }?.let {
                 clientDisplayNames.getString(clientDisplayKey(panelId, it), null)
             }
             return client.copy(displayName = alias)
         }
-        return model.copy(inbounds = model.inbounds.map { inbound -> inbound.copy(clients = inbound.clients.map(::named)) },
-            selectedClient = model.selectedClient?.let(::named))
+        val displayed = visibleInbounds.map { inbound -> inbound.copy(clients = inbound.clients.map(::named)) }
+        val selected = model.selectedClient?.takeIf { candidate ->
+            model.unlockAllEnabled || displayed.any { inbound -> inbound.clients.any { it.email == candidate.email } }
+        }?.let(::named)
+        return model.copy(inbounds = displayed, selectedClient = selected)
     }
 
     val state = mutableState.map { withClientDisplayNames(it.forDisplay()) }.stateIn(viewModelScope, SharingStarted.Eagerly, mutableState.value.forDisplay())
@@ -349,11 +360,36 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
             mutableCascade.update { it.copy(form = transform(it.form), error = null) }
     }
 
+    private fun inboundWizardPortTransports(protocol: InboundWizardProtocol): Set<InboundPortTransport> = when (protocol) {
+        InboundWizardProtocol.HYSTERIA2, InboundWizardProtocol.AMNEZIAWG -> setOf(InboundPortTransport.UDP)
+        InboundWizardProtocol.SHADOWSOCKS -> setOf(InboundPortTransport.TCP, InboundPortTransport.UDP)
+        else -> setOf(InboundPortTransport.TCP)
+    }
+
+    private suspend fun <T> retryCreationPanelRead(action: suspend () -> T): T {
+        var unavailableSince: Long? = null
+        while (true) {
+            try {
+                return action()
+            } catch (failure: PanelApiFailure) {
+                if (failure.availability != PanelAvailability.OFFLINE) throw failure
+                val now = System.currentTimeMillis()
+                val since = unavailableSince ?: now.also { unavailableSince = it }
+                val remaining = 120_000L - (now - since)
+                if (remaining <= 0L) throw failure
+                delay(minOf(2_000L, remaining))
+            }
+        }
+    }
+
     internal suspend fun wizardSuggestedPorts(panelId: String, protocol: InboundWizardProtocol, count: Int): List<Int> {
         check(foreground && sessionActive() && !mutableState.value.stealthMode && connectivity.online.value)
         require(count in 1..2) { "Нужно выбрать от одного до двух портов." }
+        val transports = inboundWizardPortTransports(protocol)
         val config = panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == panelId }) }
-        val used = panelApi.inbounds(config).map { it.port }.toSet()
+        val used = panelApi.inbounds(config).filter { inbound ->
+            inboundPortTransports(inbound).any { it in transports }
+        }.map { it.port }.toSet()
         val candidates = when (protocol) {
             InboundWizardProtocol.HYSTERIA2, InboundWizardProtocol.AMNEZIAWG -> app.invilink.xboard.panels.hysteriaUdpPortCandidates()
             else -> {
@@ -361,7 +397,23 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 preferred + (1000..9999).filter { it !in preferred }
             }
         }.filterNot { it in used }
-        return availableWizardPorts(panelId, candidates, count)
+        return candidates.take(count)
+    }
+
+    internal suspend fun wizardPortAvailable(panelId: String, port: Int, transports: Set<InboundPortTransport>): Boolean {
+        check(foreground && sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) { "Нет активной сессии или сети." }
+        require(port in 1..65535 && transports.isNotEmpty()) { "Укажите корректный порт." }
+        val config = panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == panelId }) { "Панель не найдена." } }
+        return panelApi.inbounds(config).none { inbound ->
+            inbound.port == port && inboundPortTransports(inbound).any { it in transports }
+        }
+    }
+
+    internal suspend fun wizardValidatePorts(panelId: String, protocol: InboundWizardProtocol, ports: List<Int>) {
+        check(foreground && sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) { "Нет активной сессии или сети." }
+        require(ports.isNotEmpty() && ports.all { it in 1..65535 } && ports.distinct().size == ports.size) { "Укажите разные корректные порты." }
+        val transports = inboundWizardPortTransports(protocol)
+        require(ports.all { wizardPortAvailable(panelId, it, transports) }) { "Порт уже используется инбаундом панели." }
     }
 
     internal suspend fun wizardInboundPanelDefaults(panelId: String): InboundWizardPanelDefaults {
@@ -376,41 +428,9 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    private suspend fun availableWizardPorts(panelId: String, ports: List<Int>, limit: Int): List<Int> {
-        val server = serverManager.state.value.servers.firstOrNull { it.panelId == panelId } ?: return ports.take(limit)
-        val credentials = checkNotNull(server.credentials) { "Для проверки порта нужны сохранённые SSH-учётные данные." }
-        val connection = app.invilink.xboard.ssh.SshConnection(app.invilink.xboard.ssh.ServerStore(getApplication()))
-        try {
-            val identity = connection.connect(credentials)
-            check(identity.host == server.sshHost && identity.port == server.sshPort && identity.algorithm == server.hostKeyAlgorithm && identity.keyBase64 == server.hostKeyBase64) { "Ключ SSH не совпадает." }
-            val available = mutableListOf<Int>()
-            for (port in ports) {
-                check(foreground && sessionActive() && connectivity.online.value) { "Сессия закрыта." }
-                val result = connection.execute("command -v ss >/dev/null 2>&1 || exit 2; ss -H -lntu '( sport = :$port )'", timeoutMillis = 15_000, maxBytes = 65_536)
-                check(result.exitCode == 0) { "Не удалось проверить порт $port на сервере." }
-                if (result.stdout.isBlank()) available.add(port)
-                if (available.size == limit) break
-            }
-            return available
-        } finally { connection.close() }
-    }
-
-    private suspend fun checkWizardServerPorts(panelId: String, ports: List<Int>) {
-        val available = availableWizardPorts(panelId, ports, ports.size)
-        require(available.size == ports.size) { "Один из выбранных портов занят на сервере." }
-    }
-
-    internal suspend fun wizardValidatePorts(panelId: String, ports: List<Int>) {
-        check(foreground && sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) { "Нет активной сессии или сети." }
-        require(ports.isNotEmpty() && ports.all { it in 1..65535 } && ports.distinct().size == ports.size) { "Укажите разные корректные порты." }
-        val config = panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == panelId }) { "Панель не найдена." } }
-        require(panelApi.inbounds(config).none { it.port in ports }) { "Порт уже используется инбаундом панели." }
-        checkWizardServerPorts(panelId, ports)
-    }
-
     internal suspend fun wizardCreateInbounds(request: InboundWizardRequest, progress: (Int, String) -> Unit): List<Long> {
         progress(10, "Проверка панели и портов")
-        check(foreground && sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) { "Нет активной сессии или сети." }
+        check(foreground && sessionActive() && !mutableState.value.stealthMode) { "Нет активной сессии." }
         check(repository.pendingCount() == 0) { "Сначала синхронизируйте ожидающие изменения." }
         val ports = when (request.protocol) {
             InboundWizardProtocol.VLESS_REALITY -> listOfNotNull(request.tcpPort, request.xhttpPort)
@@ -420,9 +440,11 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         val name = app.invilink.xboard.panels.normalizeClientName(request.name.trim())
         require(name.isNotBlank() && name.length <= 100 && name.none { it.isISOControl() }) { "Укажите корректное имя инбаунда." }
         val config = panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == request.panelId }) { "Панель не найдена." } }
-        checkWizardServerPorts(request.panelId, ports)
-        val existing = panelApi.inbounds(config)
-        require(existing.none { it.port in ports }) { "Порт уже используется инбаундом панели." }
+        val transports = inboundWizardPortTransports(request.protocol)
+        val existing = retryCreationPanelRead { panelApi.inbounds(config) }
+        require(existing.none { inbound -> inbound.port in ports && inboundPortTransports(inbound).any { it in transports } }) {
+            "Порт уже используется инбаундом панели."
+        }
         val names = when (request.protocol) {
             InboundWizardProtocol.VLESS_REALITY -> when (ports.size) {
                 2 -> listOf("$name TCP", "$name XHTTP")
@@ -431,10 +453,10 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
             else -> listOf(name)
         }
         require(existing.none { old -> names.any { it.equals(old.name, ignoreCase = true) } }) { "Имя инбаунда уже используется." }
-        val gateway = PanelApiCascadeGateway(panelApi, resolve = { id ->
-            check(foreground && sessionActive() && connectivity.online.value && id == request.panelId) { "Сессия закрыта." }
+        val gateway = RetryingCascadePanelGateway(PanelApiCascadeGateway(panelApi, resolve = { id ->
+            check(foreground && sessionActive() && !mutableState.value.stealthMode && id == request.panelId) { "Сессия закрыта." }
             config
-        })
+        }))
         val service = CascadeService(gateway, cascadeJournal)
         val drafts = when (request.protocol) {
             InboundWizardProtocol.VLESS_REALITY -> listOfNotNull(
@@ -461,7 +483,12 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
-            throw IllegalStateException("Создано $created из ${drafts.size}. Последняя операция могла выполниться; проверьте панель перед повтором. ${failure.message.orEmpty()}", failure)
+            val cleanup = runCatching {
+                drafts.asReversed().forEach { draft -> gateway.cleanupCreatedInbound(request.panelId, draft) }
+            }
+            val cleanupMessage = if (cleanup.isSuccess) "Созданные инбаунды удалены автоматически." else
+                "Автоматическая очистка не подтверждена: ${cleanup.exceptionOrNull()?.message.orEmpty()}"
+            throw IllegalStateException("Создано $created из ${drafts.size}. $cleanupMessage ${failure.message.orEmpty()}", failure)
         }
         progress(100, "Готово")
         return createdIds
@@ -540,7 +567,8 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         updateCascadeForm { form ->
             val entrySni = if (protocol == CascadeProtocol.HYSTERIA2 && form.entry.isNotBlank()) cascadePanelServerName(form.entry) else form.entrySni
             val exitSni = if (protocol == CascadeProtocol.HYSTERIA2 && form.exit.isNotBlank()) cascadePanelServerName(form.exit) else form.exitSni
-            form.copy(protocol = protocol, entrySni = entrySni, exitSni = exitSni)
+            form.copy(protocol = protocol, entrySni = entrySni, exitSni = exitSni,
+                entrySniDefault = entrySni, exitSniDefault = exitSni)
         }
         val updated = mutableCascade.value.form
         mutableState.value.panels.firstOrNull { it.id == updated.entry }?.let { selectCascadePanel(true, it, resetPortEdited = false) }
@@ -575,11 +603,15 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         val name = listOfNotNull(panel.location?.countryFlag?.takeIf { it.isNotBlank() },
             panel.name.ifBlank { "cascade" }).joinToString(" ").take(90)
         val sni = if (mutableCascade.value.form.protocol == CascadeProtocol.HYSTERIA2) cascadePanelServerName(panel.id) else null
-        updateCascadeForm { form -> if (entry) form.copy(entry = panel.id, entryName = name, entrySni = sni ?: form.entrySni,
-            entryPort = if (resetPortEdited) "" else form.entryPort, entrySuggestion = null, entryLoading = true,
+        updateCascadeForm { form -> if (entry) form.copy(entry = panel.id, entryName = name, entryNameDefault = name,
+            entrySni = sni ?: form.entrySni, entrySniDefault = sni ?: form.entrySniDefault,
+            entryPort = if (resetPortEdited) "" else form.entryPort, entryPortDefault = if (resetPortEdited) "" else form.entryPortDefault,
+            entrySuggestion = null, entryLoading = true,
             entryPortEdited = if (resetPortEdited) false else form.entryPortEdited, entryInbound = null)
-            else form.copy(exit = panel.id, exitName = name, exitSni = sni ?: form.exitSni,
-                exitPort = if (resetPortEdited) "" else form.exitPort, exitSuggestion = null, exitLoading = true,
+            else form.copy(exit = panel.id, exitName = name, exitNameDefault = name,
+                exitSni = sni ?: form.exitSni, exitSniDefault = sni ?: form.exitSniDefault,
+                exitPort = if (resetPortEdited) "" else form.exitPort, exitPortDefault = if (resetPortEdited) "" else form.exitPortDefault,
+                exitSuggestion = null, exitLoading = true,
                 exitPortEdited = if (resetPortEdited) false else form.exitPortEdited, exitInbound = null) }
         if (entry) entryPortJob?.cancel() else exitPortJob?.cancel()
         val job = viewModelScope.launch {
@@ -598,8 +630,12 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 else "Порт $port не занят инбаундом панели; доступность системы и firewall не проверены."
                 mutableCascade.update { state ->
                     val f = state.form
-                    if (entry && f.entry == panel.id) state.copy(form = f.copy(entryPort = if (!f.entryPortEdited) port?.toString().orEmpty() else f.entryPort, entrySuggestion = message, entryLoading = false))
-                    else if (!entry && f.exit == panel.id) state.copy(form = f.copy(exitPort = if (!f.exitPortEdited) port?.toString().orEmpty() else f.exitPort, exitSuggestion = message, exitLoading = false)) else state
+                    if (entry && f.entry == panel.id) state.copy(form = f.copy(
+                        entryPort = if (!f.entryPortEdited) port?.toString().orEmpty() else f.entryPort,
+                        entryPortDefault = port?.toString().orEmpty(), entrySuggestion = message, entryLoading = false))
+                    else if (!entry && f.exit == panel.id) state.copy(form = f.copy(
+                        exitPort = if (!f.exitPortEdited) port?.toString().orEmpty() else f.exitPort,
+                        exitPortDefault = port?.toString().orEmpty(), exitSuggestion = message, exitLoading = false)) else state
                 }
             } catch (failure: Exception) {
                 if (failure is CancellationException) throw failure
@@ -634,10 +670,10 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
 
     internal suspend fun cascadeInboundSummary(metadata: CascadeMetadata): app.invilink.xboard.panels.InboundDetail? {
         if (!sessionActive() || mutableState.value.stealthMode || !connectivity.online.value) return null
-        val id = metadata.entryInboundId ?: return null
-        val config = panelConfigMutex.withLock { panelConfigs.firstOrNull { it.id == metadata.entryPanelId } } ?: return null
+        val id = metadata.exitInboundId ?: return null
+        val config = panelConfigMutex.withLock { panelConfigs.firstOrNull { it.id == metadata.exitPanelId } } ?: return null
         return try {
-            visiblePanelInbounds(panelApi.inbounds(config), unlockAllEnabled = mutableState.value.unlockAllEnabled).firstOrNull { it.id == id && it.name == metadata.entryInboundName }.also { value ->
+            visiblePanelInbounds(panelApi.inbounds(config), unlockAllEnabled = mutableState.value.unlockAllEnabled).firstOrNull { it.id == id && it.name == metadata.exitInboundName }.also { value ->
                 if (sessionActive() && !mutableState.value.stealthMode) {
                     if (value != null) cascadeInboundCache[metadata.id] = value else cascadeInboundCache.remove(metadata.id)
                 }
@@ -693,11 +729,46 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 mutableCascade.update { it.copy(recoveryStage = recoveryStage) }
                 val history = cascadeJournal.entries()
                 mutableCascade.update { it.copy(history = history, journalLoading = false, recoveryStage = recoveryStage) }
+                retryIncompleteCascadeCleanup(history)
             } catch (failure: Exception) {
                 if (failure is CancellationException) throw failure
                 mutableCascade.update { it.copy(history = emptyList(), journalLoading = false,
                     journalError = "Не удалось прочитать журнал каскадов.") }
             }
+        }
+    }
+
+    private fun retryIncompleteCascadeCleanup(history: List<CascadeMetadata>) {
+        val pending = history.filter { metadata ->
+            metadata.inFlight && metadata.entryInboundCreated && metadata.exitInboundCreated &&
+                metadata.entryInboundSnapshot == null && metadata.exitInboundSnapshot == null
+        }
+        if (pending.isEmpty() || mutableCascade.value.busy || !connectivity.online.value) return
+        viewModelScope.launch {
+            var removedAny = false
+            try {
+                cascadeRecoveryLock.withLock {
+                    val configs = panelConfigMutex.withLock { panelConfigs.associateBy { it.id } }
+                    val gateway = PanelApiCascadeGateway(panelApi, resolve = { id ->
+                        check(sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) {
+                            "Сессия закрыта или сеть недоступна."
+                        }
+                        checkNotNull(configs[id]) { "Панель для автоматической очистки не найдена." }
+                    })
+                    cascadeJournal.entries().filter { metadata ->
+                        metadata.inFlight && metadata.entryInboundCreated && metadata.exitInboundCreated &&
+                            metadata.entryInboundSnapshot == null && metadata.exitInboundSnapshot == null
+                    }.forEach { metadata ->
+                        CascadeService(gateway, cascadeJournal).remove(metadata)
+                        removedAny = true
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // The journal remains intact and the next online refresh retries cleanup.
+            }
+            if (removedAny && sessionActive() && !mutableState.value.stealthMode) refreshCascadeJournal()
         }
     }
 
@@ -772,7 +843,11 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 check(sessionActive() && !mutableState.value.stealthMode) { "Для удаления нужна активная сессия." }
                 check(repository.pendingCount() == 0) { "Сначала синхронизируйте ожидающие изменения панелей." }
                 check(recoveryJournal.load() == null) { "Сначала проверьте и подтвердите журнал восстановления синхронизации." }
-                val stored = checkNotNull(cascadeJournal.get(metadata.id)) { "Каскад не найден." }
+                    var stored = checkNotNull(cascadeJournal.get(metadata.id)) { "Каскад не найден." }
+                    if (!stored.cleanupPending) {
+                        stored = stored.copy(cleanupPending = true)
+                        cascadeJournal.save(stored)
+                    }
                 val gateway = PanelApiCascadeGateway(panelApi, resolve = { id ->
                     check(sessionActive() && connectivity.online.value) { "Сессия закрыта или сеть недоступна." }
                     panelConfigMutex.withLock { checkNotNull(panelConfigs.firstOrNull { it.id == id }) { "Панель не найдена." } }
@@ -780,21 +855,26 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 val failures = mutableListOf<String>()
                 cascadeRecoveryLock.withLock {
                     check(recoveryJournal.load() == null) { "Сначала проверьте и подтвердите журнал восстановления синхронизации." }
-                    check(!stored.inFlight || stored.step in setOf(CascadeStep.ENTRY_INBOUND, CascadeStep.ENTRY_CLIENT) && stored.entryInboundCreated) {
-                        "Незавершённая операция находится после безопасного этапа очистки; проверьте панели вручную."
+                    check(!stored.inFlight || stored.entryInboundCreated && stored.exitInboundCreated &&
+                        stored.entryInboundSnapshot == null && stored.exitInboundSnapshot == null) {
+                        "Незавершённая операция изменила существующий инбаунд; журнал сохранён для безопасного восстановления."
                     }
                     failures.addAll(app.invilink.xboard.panels.cleanupCascadeSides { isEntry ->
                         gateway.cleanupSide(stored, entry = isEntry, exit = !isEntry)
                     })
+                    check(failures.isEmpty()) {
+                        "Очистка на панелях не подтверждена: ${failures.joinToString("; ")}. Запись сохранена, очистка будет повторена автоматически."
+                    }
                     check(sessionActive() && !mutableState.value.stealthMode) { "Сессия закрыта; запись сохранена." }
                     cascadeJournal.remove(stored.id)
                 }
                 mutableCascade.update { it.copy(busy = false, history = it.history.filterNot { item -> item.id == metadata.id }, metadata = null,
-                    error = if (failures.isEmpty()) null else "Запись каскада удалена с устройства. Очистка на панелях не подтверждена: ${failures.joinToString("; ")}. Проверьте указанные панели вручную; после тайм-аута запрос мог выполниться позже.") }
+                    error = null) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
-                mutableCascade.update { it.copy(busy = false, error = "Удаление не завершено: ${failure.message.orEmpty()}. Повторите удаление.") }
+                mutableCascade.update { it.copy(busy = false, error = "Удаление не подтверждено: ${failure.message.orEmpty()}. Запись сохранена, очистка будет повторена автоматически.") }
+                refreshCascadeJournal()
             }
         }
     }
@@ -804,8 +884,8 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         mutableCascade.update { it.copy(busy = true, metadata = null, error = null) }
         viewModelScope.launch {
             try {
-                check(sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) {
-                    "Для создания нужна активная сессия и сеть."
+                check(sessionActive() && !mutableState.value.stealthMode) {
+                    "Для создания нужна активная сессия."
                 }
                 check(repository.pendingCount() == 0) { "Сначала синхронизируйте или отмените ожидающие изменения панелей." }
                 val configs = panelConfigMutex.withLock {
@@ -829,12 +909,12 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                         mutableCascade.update { it.copy(metadata = metadata) }
                     }
                 }
-                val gateway = PanelApiCascadeGateway(panelApi, resolve = { id ->
-                    check(sessionActive() && !mutableState.value.stealthMode && connectivity.online.value) {
-                        "Сессия закрыта или сеть недоступна."
+                val gateway = RetryingCascadePanelGateway(PanelApiCascadeGateway(panelApi, resolve = { id ->
+                    check(sessionActive() && !mutableState.value.stealthMode) {
+                        "Сессия закрыта."
                     }
                     checkNotNull(configs[id])
-                })
+                }))
                 cascadeRecoveryLock.withLock {
                     check(recoveryJournal.load() == null) { "Сначала проверьте и подтвердите журнал восстановления синхронизации." }
                     CascadeService(gateway, journal).create(request)
@@ -1364,14 +1444,25 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         verifiedUpdate = null
         installerLaunched = false
         automaticInstallAttempted = false
-        mutableUpdate.update { it.copy(busy = true, downloading = true, ready = false, progress = 0, message = null) }
+        mutableUpdate.update { it.copy(busy = true, downloading = true, ready = false, progress = 0,
+            downloadedBytes = 0, totalBytes = release.size, message = null) }
         updateJob = viewModelScope.launch {
             try {
                 val result = updateClient.download(release) { bytes, total ->
-                    mutableUpdate.update { if (it.downloading) it.copy(progress = if (total > 0) ((bytes * 100 / total).toInt()).coerceIn(0, 100) else 0) else it }
+                    mutableUpdate.update { current ->
+                        if (current.downloading) current.copy(
+                            progress = if (total > 0) ((bytes * 100 / total).toInt()).coerceIn(0, 100) else 0,
+                            downloadedBytes = bytes,
+                            totalBytes = total,
+                        ) else current
+                    }
                 }
                 verifiedUpdate = result
-                mutableUpdate.update { it.copy(busy = false, downloading = false, ready = true, progress = 100, message = "Загрузка завершена. Установите обновление.") }
+                mutableUpdate.update { current ->
+                    current.copy(visible = current.visible || !updateClient.canInstall(), busy = false, downloading = false,
+                        ready = true, progress = 100, downloadedBytes = release.size, totalBytes = release.size,
+                        message = if (updateClient.canInstall()) "Загрузка завершена. Открываю установщик…" else "Разрешите установку из этого источника.")
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { mutableUpdate.update { it.copy(busy = false, downloading = false, message = "Ошибка загрузки: ${error.message ?: "неизвестная ошибка"}") } }
         }
@@ -1384,6 +1475,10 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun dismissUpdate(decline: Boolean) {
+        if (mutableUpdate.value.downloading) {
+            mutableUpdate.update { it.copy(visible = false) }
+            return
+        }
         if (decline && mutableUpdate.value.release != null) UpdateScheduler.decline(getApplication())
         updateJob?.cancel(); updateJob = null
         verifiedUpdate?.let { if (!installerLaunched) updateClient.discard(it) }
@@ -1918,7 +2013,9 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                         mutableState.update { state ->
                             val previous = state.panels.associateBy { it.id }
                             state.copy(panels = panelConfigs.map { config ->
-                                PanelSummary(config.id, config.name, measured[config.id] ?: previous[config.id]?.metrics ?: app.invilink.xboard.panels.PanelMetrics(), previous[config.id]?.location, sshManaged = isManagedPanel(config.id))
+                                val previousMetrics = previous[config.id]?.metrics
+                                val refreshedMetrics = measured[config.id] ?: previousMetrics ?: app.invilink.xboard.panels.PanelMetrics()
+                                PanelSummary(config.id, config.name, retainKnownMetrics(refreshedMetrics, previousMetrics), previous[config.id]?.location, sshManaged = isManagedPanel(config.id))
                             }, panelRefreshResult = if (refreshResult != null && state.stage == Stage.HOME && foreground) refreshResult else state.panelRefreshResult)
                         }
                         if (refreshResult != null) refreshCascadeHealth(refreshResult.id, measured)
@@ -1988,6 +2085,18 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
             storageFailure()
         }
     }
+
+    private fun retainKnownMetrics(updated: PanelMetrics, previous: PanelMetrics?): PanelMetrics = updated.copy(
+        inboundCount = updated.inboundCount ?: previous?.inboundCount,
+        clientCount = updated.clientCount ?: previous?.clientCount,
+        trafficBytes = updated.trafficBytes ?: previous?.trafficBytes,
+        cpuPercent = updated.cpuPercent ?: previous?.cpuPercent,
+        latencyMillis = updated.latencyMillis ?: previous?.latencyMillis,
+        upBytes = updated.upBytes ?: previous?.upBytes,
+        downBytes = updated.downBytes ?: previous?.downBytes,
+        memoryUsedBytes = updated.memoryUsedBytes ?: previous?.memoryUsedBytes,
+        memoryTotalBytes = updated.memoryTotalBytes ?: previous?.memoryTotalBytes,
+    )
 
     private fun updateCachedSummary(panelId: String, rows: List<app.invilink.xboard.panels.InboundDetail>) {
         fun sum(values: List<Long?>): Long? = try {
@@ -2204,20 +2313,28 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
         val config = panelConfigs.firstOrNull { it.id == state.activePanelId } ?: return
         if (!panelConnectionAllowed(config) || !currentDetailLoadOnline) return
         val rows = try {
-            visiblePanelInbounds(panelApi.inbounds(config), unlockAllEnabled = state.unlockAllEnabled).associateBy { it.id }
+            repositoryInbounds(config, true)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { return }
         mutableState.update { current ->
             if (!foreground || current.stage != Stage.PANEL_DETAIL || current.activePanelId != config.id ||
                 current.detailsLoading || current.inboundSaving || current.clientSaving || current.deletionRunning ||
                 current.unlockAllEnabled != state.unlockAllEnabled) current
-            else current.copy(inbounds = current.inbounds.map { inbound ->
-                val fresh = rows[inbound.id]
-                if (fresh != null && fresh.name == inbound.name && fresh.protocol == inbound.protocol && fresh.port == inbound.port)
-                    inbound.copy(up = fresh.up, down = fresh.down)
-                else inbound
-            })
+            else {
+                val existingClient = current.selectedClient?.let { selected ->
+                    rows.firstOrNull { it.name == current.selectedClientInbound }?.clients?.firstOrNull { it.email == selected.email }
+                }
+                current.copy(
+                    inbounds = rows,
+                    expandedInbounds = current.expandedInbounds.intersect(rows.map { it.id }.toSet()),
+                    selectedClient = existingClient,
+                    clientLinks = if (existingClient == null) ClientLinks() else current.clientLinks,
+                    linksLoading = if (existingClient == null) false else current.linksLoading,
+                    linksError = if (existingClient == null) null else current.linksError,
+                )
+            }
         }
+        updateCachedSummary(config.id, rows)
     }
 
     private suspend fun refreshClientActivity() {
@@ -3144,6 +3261,7 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     if (foreground) synchronizePending()
                 }
+                if (tick % 30 == 0 && foreground) refreshCascadeJournal()
             }
         }
     }

@@ -13,6 +13,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.window.DialogWindowProvider
 import app.invilink.xboard.MainActivity
@@ -23,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 import app.invilink.xboard.panels.PanelSummary
 import app.invilink.xboard.panels.PanelAvailability
@@ -353,7 +355,11 @@ fun XBoardTheme(mode: ThemeMode, content: @Composable () -> Unit) {
             surfaceContainerLowest = palette.background
         )
     }
-    CompositionLocalProvider(LocalXBoardPalette provides palette) {
+    val density = LocalDensity.current
+    CompositionLocalProvider(
+        LocalXBoardPalette provides palette,
+        LocalDensity provides Density(density.density, fontScale = 1f),
+    ) {
         MaterialTheme(colorScheme = colors, typography = XBoardTypography, content = content)
     }
 }

@@ -947,10 +947,28 @@ class OfflinePanelRepository(context: Context, private val api: PanelApi) {
     }
 
     private fun cacheSnapshot(panel: JSONObject, snapshot: Pair<JSONArray, JSONArray?>) {
+        val inboundRows = rows(snapshot.first)
+        val inboundIds = inboundRows.map { it.getLong("id").toString() }.toSet()
+        val fullInbounds = panel.getJSONObject("fullInbounds")
+        fullInbounds.keys().asSequence().toList().filterNot(inboundIds::contains).forEach(fullInbounds::remove)
+        val emails = snapshot.second?.let { clients -> rows(clients).map { it.getString("email") }.toSet() }
+            ?: runCatching {
+                inboundRows.flatMap { inbound ->
+                    val settings = nested(inbound.opt("settings"))
+                    val clients = settings.optJSONArray("clients") ?: JSONArray()
+                    rows(clients).map { it.getString("email") }
+                }.toSet()
+            }.getOrNull()
+        if (emails != null) {
+            listOf("envelopes", "links", "clientAliases").forEach { key ->
+                val cache = panel.getJSONObject(key)
+                cache.keys().asSequence().toList().filterNot(emails::contains).forEach(cache::remove)
+            }
+        }
         val value = JSONObject().put("inbounds", JSONArray(snapshot.first.toString())).put("at", now())
         snapshot.second?.let { value.put("clients", JSONArray(it.toString())) }
         panel.put("snapshot", value)
-        rows(snapshot.first).forEach { row -> if (isFullInbound(row)) cacheInbound(panel, row) }
+        inboundRows.forEach { row -> if (isFullInbound(row)) cacheInbound(panel, row) }
     }
 
     private suspend fun obtainInbound(state: JSONObject, panel: JSONObject, config: PanelConfig, id: Long, online: Boolean): JSONObject {

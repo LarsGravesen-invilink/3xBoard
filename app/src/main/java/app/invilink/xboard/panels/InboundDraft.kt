@@ -34,7 +34,7 @@ data class InboundDraft(
     val security: String = "none",
     val quotaGiB: String = "0",
     val expiryTime: String = "0",
-    val trafficReset: String = "never",
+    val trafficReset: String = "monthly",
     val trafficResetDay: String = "1",
     val enabled: Boolean = true,
     val protocolSettings: String = "{\"clients\":[],\"decryption\":\"none\",\"fallbacks\":[]}",
@@ -115,7 +115,8 @@ data class InboundDraft(
         "extra" -> copy(extra = value)
         "sniMode" -> {
             require(value == sniMode || value in listOf("preserve", "random", "custom") + sniChoices()) { "Неизвестный режим SNI." }
-            copy(sniMode = value)
+            val updated = copy(sniMode = value)
+            if (value in sniChoices()) updated.applySelectedSni(currentSni) else updated
         }
         "sniCustom" -> copy(sniCustom = value)
         "sniCandidates" -> copy(sniCandidates = value.split(',', '\n'))
@@ -423,7 +424,14 @@ data class InboundDraft(
         return resolved.copy(streamSettings = stream.toString(2))
     }
 
-    private fun applySni(stream: JSONObject) {
+    private fun applySelectedSni(previousSni: String): InboundDraft {
+        if (security !in setOf("tls", "xtls", "reality")) return this
+        val stream = jsonObject(streamSettings, "Настройки транспорта")
+        applySni(stream, previousSni)
+        return copy(streamSettings = stream.toString(2))
+    }
+
+    private fun applySni(stream: JSONObject, previousSni: String = "") {
         if (security !in setOf("tls", "xtls", "reality") || sniMode == "preserve") return
         require(sniMode != "random") { "Перед сохранением случайного SNI вызовите prepareForSave()." }
         val hostname = normalizeSni(if (sniMode == "custom") sniCustom else sniMode)
@@ -431,8 +439,13 @@ data class InboundDraft(
             val config = stream.optJSONObject("realitySettings") ?: JSONObject().also { stream.put("realitySettings", it) }
             config.put("serverNames", JSONArray().put(hostname))
             config.optJSONObject("settings")?.let { if (it.has("serverName")) it.put("serverName", hostname) }
-            if (config.optString("target").isBlank() && config.optString("dest").isBlank()) {
-                config.put(if (config.has("dest") && !config.has("target")) "dest" else "target", "$hostname:443")
+            val targetField = if (config.has("dest") && !config.has("target")) "dest" else "target"
+            val previous = runCatching { normalizeSni(previousSni) }.getOrNull()
+            val target = config.optString(targetField)
+            if (target.isBlank()) {
+                config.put(targetField, "$hostname:443")
+            } else if (previous != null && target.startsWith("$previous:")) {
+                config.put(targetField, "$hostname:${target.substringAfter(':')}")
             }
         } else {
             val config = stream.optJSONObject(tlsKey()) ?: JSONObject().also { stream.put(tlsKey(), it) }

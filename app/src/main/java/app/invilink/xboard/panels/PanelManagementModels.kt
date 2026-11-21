@@ -27,7 +27,7 @@ data class InboundDetail(
     override fun toString() = "InboundDetail($id, [REDACTED])"
 }
 
-internal fun privateName(value: String): Boolean = value.startsWith("hide", ignoreCase = true)
+internal fun privateName(value: String): Boolean = value.contains("hide", ignoreCase = true)
 
 internal fun visibleCascade(cascade: CascadeMetadata, unlockAllEnabled: Boolean = false): Boolean =
     unlockAllEnabled || (!privateName(cascade.entryInboundName) && !privateName(cascade.exitInboundName))

@@ -42,8 +42,8 @@ class CascadeServiceTest {
         assertThrows(IllegalArgumentException::class.java) {
             cascadeCreatedInboundForDeletion(rows(row, JSONObject().put("id", 8).put("tag", "cascade-entry").put("remark", "cascade")), 7, "cascade-entry", "cascade")
         }
-        assertNull(cascadeCreatedInboundForDeletion(rows(row), 7, "cascade-entry", "hide cascade"))
-        assertNull(cascadeCreatedInboundForDeletion(rows(JSONObject(row.toString()).put("remark", "hide cascade")), 7, "cascade-entry", "cascade"))
+        assertThrows(IllegalArgumentException::class.java) { cascadeCreatedInboundForDeletion(rows(row), 7, "cascade-entry", "hide cascade") }
+        assertThrows(IllegalArgumentException::class.java) { cascadeCreatedInboundForDeletion(rows(JSONObject(row.toString()).put("remark", "hide cascade")), 7, "cascade-entry", "cascade") }
     }
     @Test fun hiddenCascadeNamesAreIndependentAndAvoidCollisions() {
         val empty = CascadeOccupiedNames(emptySet(), emptySet())
@@ -781,35 +781,27 @@ class CascadeServiceTest {
         assertEquals(cascadeNames(2, ":DE:", ":US:").entryInbound, result.entryInboundName)
     }
 
-    @Test fun eachPartialFailureLeavesAnInFlightJournalAndStops() = runBlocking {
-        val stages = listOf("inbound:entry" to CascadeStep.ENTRY_INBOUND, "client:entry:11" to CascadeStep.ENTRY_CLIENT,
-            "inbound:exit" to CascadeStep.EXIT_INBOUND, "client:exit:22" to CascadeStep.EXIT_CLIENT,
-            "routing:entry" to CascadeStep.ROUTING, "restart:exit" to CascadeStep.RESTART_EXIT,
-            "restart:entry" to CascadeStep.RESTART_ENTRY, "configuration" to CascadeStep.VERIFY, "verify" to CascadeStep.VERIFY)
-        for ((operation, step) in stages) {
+    @Test fun partialCreationFailuresAreRolledBackAndJournalIsRemoved() = runBlocking {
+        val stages = listOf("inbound:entry", "client:entry:11", "inbound:exit", "client:exit:22",
+            "routing:entry", "restart:exit", "restart:entry", "configuration", "verify")
+        for (operation in stages) {
             val gateway = Gateway().apply { failAt = operation }
             val journal = Journal()
             val error = assertThrows(IllegalStateException::class.java) { runBlocking { CascadeService(gateway, journal).create(request()) } }
             assertEquals(operation, error.cause!!.message)
-            val metadata = journal.history.last()
-            assertNull(gateway.cleanupMetadata)
-            assertEquals(step, metadata.step)
-            assertTrue(metadata.inFlight)
-            assertEquals(operation, gateway.calls.last())
-            assertFalse(journal.removed)
-            assertEquals(if (step.ordinal > CascadeStep.ENTRY_INBOUND.ordinal) 11L else null, metadata.entryInboundId)
-            assertEquals(if (step.ordinal > CascadeStep.EXIT_INBOUND.ordinal) 22L else null, metadata.exitInboundId)
+            assertNotNull(gateway.cleanupMetadata)
+            assertTrue(journal.removed)
         }
     }
 
-    @Test fun inFlightRemovalNeverCallsGateway() = runBlocking {
+    @Test fun inFlightCreatedCascadeIsCleanedThroughGateway() = runBlocking {
         val gateway = Gateway()
         val journal = Journal()
         val metadata = CascadeMetadata("cascade", "entry", "exit", "entry-tag", "exit-tag", "out-tag",
             "entry-client", "exit-client", CascadeStep.ROUTING, inFlight = true, entryInboundId = 11, exitInboundId = 22)
-        assertThrows(IllegalStateException::class.java) { runBlocking { CascadeService(gateway, journal).remove(metadata) } }
-        assertTrue(gateway.calls.isEmpty())
-        assertFalse(journal.removed)
+        CascadeService(gateway, journal).remove(metadata)
+        assertNotNull(gateway.cleanupMetadata)
+        assertTrue(journal.removed)
     }
 
     @Test fun failedCleanupKeepsJournalForRetry() = runBlocking {

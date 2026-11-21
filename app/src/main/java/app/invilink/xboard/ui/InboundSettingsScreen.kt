@@ -345,7 +345,7 @@ internal fun InboundSettingsScreen(
                 )
                 InboundSettingChoice(
                     "trafficReset", "Сброс трафика", draft.trafficReset, InboundDraft.trafficResetChoices, !saving,
-                    "Периодический сброс суммарного трафика inbound. По умолчанию отключён.", onField,
+                    "Сброс суммарного трафика inbound. По умолчанию — ежемесячно 1-го числа.", onField,
                 )
                 if (draft.trafficReset == "monthly") {
                     InboundSettingField(

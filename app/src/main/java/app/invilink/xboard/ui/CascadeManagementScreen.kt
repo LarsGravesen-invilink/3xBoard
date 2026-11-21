@@ -120,7 +120,8 @@ private fun CascadeNodeCard(
     val exitFlag = summaries[cascade.exitPanelId]?.location?.countryFlag.orEmpty()
     val inboundId = if (entry) cascade.entryInboundId else cascade.exitInboundId
     val complete = cascade.step == CascadeStep.COMPLETE && !cascade.inFlight
-    val canSafelyCleanupIncomplete = cascade.inFlight && cascade.step in setOf(CascadeStep.ENTRY_INBOUND, CascadeStep.ENTRY_CLIENT) && cascade.entryInboundCreated
+    val canSafelyCleanupIncomplete = cascade.inFlight && cascade.entryInboundCreated && cascade.exitInboundCreated &&
+        cascade.entryInboundSnapshot == null && cascade.exitInboundSnapshot == null
     val palette = LocalXBoardPalette.current
     var confirming by remember(cascade.id) { mutableStateOf(false) }
     var confirmingForget by remember(cascade.id) { mutableStateOf(false) }
@@ -146,7 +147,7 @@ private fun CascadeNodeCard(
     if (confirming) DeletionConfirmationDialog(
         title = if (cascade.inFlight && !canSafelyCleanupIncomplete) "Удалить запись незавершённой операции?" else "Удалить каскад?",
         warning = when {
-            cascade.inFlight && canSafelyCleanupIncomplete -> "Приложение проверит и удалит только созданный входной инбаунд с совпадающими tag и именем. При несовпадении запись останется для ручной проверки."
+            cascade.inFlight && canSafelyCleanupIncomplete -> "Приложение проверит и удалит только созданные им инбаунды с совпадающими tag и именем, включая оба узла. При несовпадении запись сохранится для повторной автоматической очистки."
             cascade.inFlight -> "На панелях ничего не будет удалено или восстановлено. Результат последнего запроса неизвестен; проверьте обе панели вручную. Снимки из этого журнала будут потеряны."
             else -> "Запись всего каскада будет удалена с устройства. Приложение попытается очистить обе панели: созданные инбаунды удаляются вместе с подключениями, общие клиенты целиком не удаляются. Если панель недоступна или проверка не пройдёт, данные на ней могут остаться — проверьте их вручную. Снимки из записи будут потеряны; очистка не атомарна."
         },
@@ -164,7 +165,7 @@ private fun CascadeNodeCard(
         color = palette.soft, border = BorderStroke(1.dp, palette.line),
     ) {
         Box(Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 12.dp)) {
-            Column(Modifier.fillMaxWidth().padding(end = 48.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 val country = panel?.location?.let {
                     Locale("", it.countryCode).getDisplayCountry(Locale("ru")).ifBlank { it.countryName }
                 }?.takeIf { it.isNotBlank() }
@@ -183,15 +184,31 @@ private fun CascadeNodeCard(
                     app.invilink.xboard.panels.CascadeProtocol.HYSTERIA2 -> "QUIC/UDP" to if (palette.isDark) Color(0xFFFFD54F) else Color(0xFFB17600)
                     app.invilink.xboard.panels.CascadeProtocol.AMNEZIAWG -> "UDP" to if (palette.isDark) Color(0xFFFFD54F) else Color(0xFFB17600)
                 }
-                Text(country ?: "Неизвестная страна", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                Text(nodeTitle, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.secondary)
+                Text(country ?: "Неизвестная страна", Modifier.padding(end = 48.dp), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(nodeTitle, Modifier.padding(end = 48.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = palette.secondary)
                 if (customName != null && customName != nodeAddress) {
-                    Text(customName, style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
+                    Text(customName, Modifier.padding(end = 48.dp), style = MaterialTheme.typography.bodyMedium, color = palette.secondary)
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(nodeAddress, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = palette.secondary, maxLines = 1)
-                    CascadeNodeTag(protocol.first, protocol.second, "Протокол: ${protocol.first}")
-                    CascadeNodeTag(transport.first, transport.second, "Транспорт: ${transport.first}")
+                Text(nodeAddress, Modifier.padding(end = 48.dp), style = MaterialTheme.typography.bodyMedium, color = palette.secondary, maxLines = 1)
+                Box(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(end = 44.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                            CascadeNodeTag(protocol.first, protocol.second, "Протокол: ${protocol.first}")
+                            CascadeNodeTag(transport.first, transport.second, "Транспорт: ${transport.first}")
+                        }
+                        val ping = panel?.metrics?.takeIf { it.availability == PanelAvailability.ONLINE }?.latencyMillis
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("API пинг: ", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                            Text(ping?.let { "$it мс" } ?: "—", style = MaterialTheme.typography.bodySmall, color = latencyColor(ping))
+                            if (!complete) Text(" · не завершён", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                            if (cascade.cleanupPending) Text(" · очистка будет повторена", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
+                        }
+                    }
+                    CascadeNodeDeleteButton(
+                        onClick = { confirming = true },
+                        enabled = !busy,
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                    )
                 }
                 if (!cascade.entryInboundCreated || !cascade.exitInboundCreated) {
                     Text("Восстановление существующих инбаундов выполняется с проверкой изменений; при конфликте журнал сохраняется.",
@@ -201,19 +218,8 @@ private fun CascadeNodeCard(
                     TextButton(onClick = { showSnapshot = true }, enabled = !busy) { Text("Показать исходный снимок") }
                 }
                 if (!complete) TextButton(onClick = { confirmingForget = true }, enabled = !busy) { Text("Удалить запись") }
-                val ping = panel?.metrics?.takeIf { it.availability == PanelAvailability.ONLINE }?.latencyMillis
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("API пинг: ", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                    Text(ping?.let { "$it мс" } ?: "—", style = MaterialTheme.typography.bodySmall, color = latencyColor(ping))
-                    if (!complete) Text(" · не завершён", style = MaterialTheme.typography.bodySmall, color = palette.secondary)
-                }
             }
             Text(if (entry) entryFlag else exitFlag, Modifier.align(Alignment.TopEnd), fontSize = 32.sp, lineHeight = 38.sp)
-            CascadeNodeDeleteButton(
-                onClick = { confirming = true },
-                enabled = !busy,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 2.dp, bottom = 2.dp),
-            )
         }
     }
 }
