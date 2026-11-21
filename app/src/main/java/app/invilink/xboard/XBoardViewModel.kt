@@ -2321,12 +2321,22 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
                 current.detailsLoading || current.inboundSaving || current.clientSaving || current.deletionRunning ||
                 current.unlockAllEnabled != state.unlockAllEnabled) current
             else {
+                val freshById = rows.associateBy { it.id }
+                val updatedRows = current.inbounds.map { stored ->
+                    val fresh = freshById[stored.id]?.takeIf { it.name == stored.name } ?: return@map stored
+                    val clients = stored.clients.map { client ->
+                        fresh.clients.firstOrNull { it.email == client.email }?.let { latest ->
+                            client.copy(up = latest.up, down = latest.down)
+                        } ?: client
+                    }
+                    stored.copy(up = fresh.up, down = fresh.down, clients = clients)
+                }
                 val existingClient = current.selectedClient?.let { selected ->
-                    rows.firstOrNull { it.name == current.selectedClientInbound }?.clients?.firstOrNull { it.email == selected.email }
+                    updatedRows.firstOrNull { it.name == current.selectedClientInbound }?.clients?.firstOrNull { it.email == selected.email }
                 }
                 current.copy(
-                    inbounds = rows,
-                    expandedInbounds = current.expandedInbounds.intersect(rows.map { it.id }.toSet()),
+                    inbounds = updatedRows,
+                    expandedInbounds = current.expandedInbounds.intersect(updatedRows.map { it.id }.toSet()),
                     selectedClient = existingClient,
                     clientLinks = if (existingClient == null) ClientLinks() else current.clientLinks,
                     linksLoading = if (existingClient == null) false else current.linksLoading,
@@ -3254,11 +3264,11 @@ class XBoardViewModel(application: Application) : AndroidViewModel(application) 
             while (isActive) {
                 delay(2_000L)
                 if (foreground && mutableState.value.stage == Stage.HOME) refreshPanels(visual = false)
+                if (foreground && mutableState.value.stage == Stage.PANEL_DETAIL && canManageDetails()) {
+                    refreshInboundCounters()
+                    if (mutableState.value.expandedInbounds.isNotEmpty()) refreshClientActivity()
+                }
                 if (++tick % 5 == 0) {
-                    if (foreground && mutableState.value.stage == Stage.PANEL_DETAIL && canManageDetails()) {
-                        refreshInboundCounters()
-                        refreshClientActivity()
-                    }
                     if (foreground) synchronizePending()
                 }
                 if (tick % 30 == 0 && foreground) refreshCascadeJournal()
